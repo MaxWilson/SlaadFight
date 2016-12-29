@@ -21,7 +21,7 @@ type SaveAbility = Dex | Con
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
 type Effect = Afraid | Blinded | Damage of Damage
 type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll
-type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option } with
+type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option; } with
     static member Create (name, effect) = { Name = name; Effect = effect; UsesRemaining = None }
     static member Create (name, effect, uses) = { Name = name; Effect = effect; UsesRemaining = Some uses }
 
@@ -125,7 +125,12 @@ module Combatants =
             else
                 sprintf "%s: %d HP (%d damage taken)" this.Name hp (maxHP - hp)
         member this.TakeTurn (target: Combatant) =
-            let canUse = (fun (a:Action) -> match a.UsesRemaining with | None -> true | Some(x) when x > 0 -> true | _ -> false)
+            let canUse = (fun (a:Action) ->
+                match a.Effect with
+                | Healing(_) when float this.HP > float maxHP * 0.8 -> false // use healing when at less than 80% of health
+                | _ ->
+                    match a.UsesRemaining with | None -> true | Some(x) when x > 0 -> true | _ -> false
+            )
             let execute (a: Action) =
                 printfn "%s does %s" this.Name a.Name
                 if a.UsesRemaining.IsSome then
@@ -285,6 +290,7 @@ let compare opponent friendlyAlternatives =
                 [for x in 1..NumberOfRuns do
                     let friend : Combatant = alt()
                     let foe = opponent()
+                    printfn "========================\n"
                     fight friend foe
                     yield friend.IsAlive, friend.HP
                     ]
