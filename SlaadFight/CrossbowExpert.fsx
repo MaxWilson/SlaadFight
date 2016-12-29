@@ -50,7 +50,7 @@ let formatDice (dice: DieRoll list) =
             loop (if Map.containsKey dr.DieSize acc then Map.add dr.DieSize (acc.[dr.DieSize] + dr.N) acc else Map.add dr.DieSize dr.N acc) (staticBonus + dr.Plus) t
     loop Map.empty 0 dice
 
-type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsProficient
+type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsProficient | ImprovedCritical
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -142,7 +142,7 @@ module Combatants =
                     | Direct(a) ->
                         let attackRoll = d20 attackerStatus
                         printfn "Roll: %d" attackRoll
-                        if attackRoll = 20 then
+                        if attackRoll = 20 || (attackRoll = 19 && hasTrait this ImprovedCritical) then
                             let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage))
                             printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
                             target.TakeDamage dmg Weapon
@@ -210,14 +210,14 @@ open Combatants
 
 let deathScuzz() = Combatant("Black Beastie", (20, 15, 19, 15, 10, 18, 170), AC=18, Regen=10, Blindsight=true,
                      Actions = [
-                        Action.Create("Cloudkill", ConcentrationEffect(15, All, [Blinded; Damage(SaveForHalf(Con, 15, DieRoll.Create(5,8), Poison))]), 1)
-                        Action.Create("Fear", ConcentrationEffect(15, EnemyOnly, [Afraid]), 2)
+//                        Action.Create("Cloudkill", ConcentrationEffect(15, All, [Blinded; Damage(SaveForHalf(Con, 15, DieRoll.Create(5,8), Poison))]), 1)
+//                        Action.Create("Fear", ConcentrationEffect(15, EnemyOnly, [Afraid]), 2)
                         Action.Create("Multiattack", Attack [
                                                                 Attack.Create "bites" 9 [DieRoll.Create(1, 8, 5); DieRoll.Create(2, 6)]
                                                                 Attack.Create "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
                                                                 Attack.Create "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
                                                                 ])
-                        Action.Create("Fireball", Instant(All, SaveForHalf(Dex, 15, DieRoll.Create(8, 6), Fire)), 2)
+//                        Action.Create("Fireball", Instant(All, SaveForHalf(Dex, 15, DieRoll.Create(8, 6), Fire)), 2)
                      ])
 
 let earthElemental() = Combatant("Gronk the Earthling", (20, 8, 20, 5, 10, 5, 126), AC=17,
@@ -229,7 +229,7 @@ let earthElemental() = Combatant("Gronk the Earthling", (20, 8, 20, 5, 10, 5, 12
                          ])
 
 // Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Sharpshooter, Crossbow Expert, and Tough; fighting styles Archery and Defense. Has a +1 Hand Crossbow.
-let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete],
+let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical],
                     Actions = [
                         Action.Create("Attack", Attack [
                                                                 BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
@@ -243,7 +243,7 @@ let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=1
                     ])
 
 // Brutus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Defensive Duelist, Mage Slayer, and Tough; fighting styles Dueling and Defense. Has a +1 Rapier.
-let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient],
+let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient; ImprovedCritical],
                     Actions = [
                         Action.Create("Attack", Attack [
                                                                 BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 8)]))
@@ -278,21 +278,23 @@ let fight c1 c2 =
         c2.newRound()
 
 let compare opponent friendlyAlternatives =
+    let NumberOfRuns = 100
     let avgs = [
         for alt in friendlyAlternatives do
             let results =
-                [for x in 1..100 do
+                [for x in 1..NumberOfRuns do
                     let friend : Combatant = alt()
                     let foe = opponent()
                     fight friend foe
                     yield friend.IsAlive, friend.HP
                     ]
             let live = results |> List.filter fst
-            let avgHp = ((live |> List.sumBy snd |> float) / 100.)
+            let avgHp = ((live |> List.sumBy snd |> float) / (float NumberOfRuns))
             let friend = alt()
-            yield sprintf "%s wins %d out of 100 matches, with %f HP remaining (%f%% of total)" friend.Name (live |> List.length) avgHp (avgHp / float friend.HP * 100.)
+            let foe = opponent()
+            yield sprintf "%s wins %d out of 100 matches against %s, with %f HP remaining (%f%% of total)" friend.Name (live |> List.length) foe.Name avgHp (avgHp / float friend.HP * 100.)
         ]
     for report in avgs do
         printfn "%s" report
 
-compare earthElemental [shooter; stabber]
+compare deathScuzz [shooter; stabber]
