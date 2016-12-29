@@ -50,7 +50,7 @@ let formatDice (dice: DieRoll list) =
             loop (if Map.containsKey dr.DieSize acc then Map.add dr.DieSize (acc.[dr.DieSize] + dr.N) acc else Map.add dr.DieSize dr.N acc) (staticBonus + dr.Plus) t
     loop Map.empty 0 dice
 
-type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsProficient | ImprovedCritical
+type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsProficient | ImprovedCritical | ActionSurge
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -64,6 +64,7 @@ module Combatants =
         let mutable isAfraid = false
         let mutable concentration = ref None
         let mutable hasReaction = true
+        let mutable hasActionSurged = false
         let mutable hasAction = true
         let mutable hp = maxHP
         let restoreHP n =
@@ -202,6 +203,11 @@ module Combatants =
                 | Healing(amt) -> restoreHP (d amt.N amt.DieSize amt.Plus)
             let action = this.Actions |> Seq.find canUse
             execute action
+            if hasTrait this ActionSurge && not hasActionSurged then
+                let action = this.Actions |> Seq.find canUse
+                printfn "ACTION SURGE!!"
+                execute action
+                hasActionSurged <- true
             match this.BonusActions |> Seq.tryFind canUse with
             | Some(bonus) -> execute bonus
             | _ -> ()
@@ -234,7 +240,7 @@ let earthElemental() = Combatant("Gronk the Earthling", (20, 8, 20, 5, 10, 5, 12
                          ])
 
 // Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Sharpshooter, Crossbow Expert, and Tough; fighting styles Archery and Defense. Has a +1 Hand Crossbow.
-let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical],
+let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge],
                     Actions = [
                         Action.Create("Attack", Attack [
                                                                 BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
@@ -248,7 +254,7 @@ let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=1
                     ])
 
 // Brutus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Defensive Duelist, Mage Slayer, and Tough; fighting styles Dueling and Defense. Has a +1 Rapier.
-let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient; ImprovedCritical],
+let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient; ImprovedCritical; ActionSurge],
                     Actions = [
                         Action.Create("Attack", Attack [
                                                                 BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 8)]))
