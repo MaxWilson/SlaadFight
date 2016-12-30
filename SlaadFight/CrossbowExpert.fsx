@@ -20,7 +20,7 @@ type DamageType = Weapon | Poison | Fire
 type SaveAbility = Dex | Con
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
 type Effect = Afraid | Blinded | Damage of Damage
-type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll
+type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll | BreakFree
 type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option; } with
     static member Create (name, effect) = { Name = name; Effect = effect; UsesRemaining = None }
     static member Create (name, effect, uses) = { Name = name; Effect = effect; UsesRemaining = Some uses }
@@ -73,6 +73,7 @@ module Combatants =
         let hasTrait (this: Combatant) = flip List.contains this.Traits
         let acrobatics (this: Combatant) = statBonus dex + (if hasTrait this RemarkableAthlete then prof /2 else 0)
         let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsExpertise then prof * 2 elif hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
+        member this.Athletics = athletics this
         member this.InitBonus =
             statBonus dex + (if List.contains RemarkableAthlete this.Traits then prof /2 else 0)
         member this.IsAlive = hp > 0
@@ -132,9 +133,12 @@ module Combatants =
             else
                 sprintf "%s: %d HP (%d damage taken)" this.Name hp (maxHP - hp)
         member this.TakeTurn (target: Combatant) =
+            if isProne && not isGrappled then
+                isProne <- false // stand back up
             let canUse = (fun (a:Action) ->
                 match a.Effect with
                 | Healing(_) when float this.HP > float maxHP * 0.8 -> false // use healing when at less than 80% of health
+                | BreakFree -> isProne && isGrappled
                 | _ ->
                     match a.UsesRemaining with | None -> true | Some(x) when x > 0 -> true | _ -> false
             )
@@ -218,6 +222,15 @@ module Combatants =
                 | Instant(t, d) -> ()
                 | ConcentrationEffect(dc, t, effects) -> ()
                 | Healing(amt) -> restoreHP (d amt.N amt.DieSize amt.Plus)
+                | BreakFree ->
+                    let me = d20 Regular + athletics this
+                    let him = d20 Regular + target.Athletics
+                    if me > him then
+                        printfn "%s breaks free! (%d beats %d)" this.Name me him
+                        isGrappled <- false
+                        isProne <- false
+                    else
+                        printfn "%s cannot break free! (%d does not beat %d)" this.Name me him
             if hasAction then
                 let action = this.Actions |> Seq.find canUse
                 execute action
@@ -258,18 +271,24 @@ let earthElemental() = Combatant("Gronk the Earthling", (20, 8, 20, 5, 10, 5, 12
                          ])
 
 // Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Sharpshooter, Crossbow Expert, and Tough; fighting styles Archery and Defense. Has a +1 Hand Crossbow.
-let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge],
+let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; AthleticsProficient],
                     Actions = [
-                        Action.Create("Attack", Attack [
+                        Action.Create("Crossbow Attack", Attack [
                                                                 BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
                                                                 BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
                                                                 BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
+                                                                ])
+                        Action.Create("Rapier Attack", Attack [
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
                                                                 ])
                     ],
                     BonusActions = [
                         Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 12)), 1)
                         Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 6 [DieRoll.Create(1, 8, 15)], Attack.Create "shoots" 11 [DieRoll.Create(1, 8, 5)])])
                     ])
+
 
 // Brutus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Defensive Duelist, Mage Slayer, and Tough; fighting styles Dueling and Defense. Has a +1 Rapier.
 let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient; ImprovedCritical; ActionSurge],
@@ -341,5 +360,4 @@ let compare opponent friendlyAlternatives =
 
 compare earthElemental [shooter; stabber; swash]
 compare deathScuzz [shooter; stabber; swash]
-
-fight (deathScuzz()) (swash())
+fight (deathScuzz()) (shooter())
