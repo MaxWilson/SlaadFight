@@ -50,7 +50,7 @@ let formatDice (dice: DieRoll list) =
             loop (if Map.containsKey dr.DieSize acc then Map.add dr.DieSize (acc.[dr.DieSize] + dr.N) acc else Map.add dr.DieSize dr.N acc) (staticBonus + dr.Plus) t
     loop Map.empty 0 dice
 
-type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsProficient | ImprovedCritical | ActionSurge
+type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -67,11 +67,12 @@ module Combatants =
         let mutable hasActionSurged = false
         let mutable hasAction = true
         let mutable hp = maxHP
+        let mutable hasSneakAttacked = false
         let restoreHP n =
             hp <- min maxHP (hp + n)
         let hasTrait (this: Combatant) = flip List.contains this.Traits
         let acrobatics (this: Combatant) = statBonus dex + (if hasTrait this RemarkableAthlete then prof /2 else 0)
-        let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
+        let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsExpertise then prof * 2 elif hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
         member this.InitBonus =
             statBonus dex + (if List.contains RemarkableAthlete this.Traits then prof /2 else 0)
         member this.IsAlive = hp > 0
@@ -84,6 +85,11 @@ module Combatants =
         member val Traits = [] with get, set
         member val Resists : DamageType list = [] with get, set
         member private this.TakeDamage n dtype =
+            let n = if dtype = Weapon && hasReaction then
+                        printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
+                        hasReaction <- false
+                        n / 2
+                    else n
             if this.Resists |> List.contains dtype then
                 printfn "%s takes %d points of damage! (Halved from %d for %A resistance)" this.Name (n/2) n dtype
                 hp <- hp - n/2
@@ -97,6 +103,7 @@ module Combatants =
         member this.newRound() =
             hasReaction <- true
             hasAction <- true
+            hasSneakAttacked <- false
             if this.Regen > 0 then
                 restoreHP this.Regen
         member this.TryReact() =
@@ -148,15 +155,26 @@ module Combatants =
                     | Direct(a) ->
                         let attackRoll = d20 attackerStatus
                         printfn "Roll: %d" attackRoll
+                        // add sneak attack damage once per round if SneakAttack trait exists
+                        let addSneak dmg =
+                            if hasSneakAttacked then
+                                dmg
+                            else
+                                match this.Traits |> List.tryFind (function SneakAttack(_) -> true | _ -> false) with
+                                | Some(SneakAttack(sneak)) ->
+                                    printfn "SNEAK ATTACK!"
+                                    hasSneakAttacked <- true
+                                    sneak :: dmg
+                                | _ -> dmg
                         if attackRoll = 20 || (attackRoll = 19 && hasTrait this ImprovedCritical) then
-                            let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage))
+                            let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
                             printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
                             target.TakeDamage dmg Weapon
                         elif attackRoll + a.ToHit >= target.AC then
                             if attackRoll + a.ToHit < (target.AC + 4) && target.TryReact() then
                                 printfn "%s misses %s (parried)" this.Name target.Name
                             else
-                                let dmg = DieRoll.eval a.Damage
+                                let dmg = DieRoll.eval (a.Damage |> addSneak)
                                 printf "Hit! %s %s %s: " this.Name a.Text target.Name
                                 target.TakeDamage dmg Weapon
                         else
@@ -201,16 +219,17 @@ module Combatants =
                 | Instant(t, d) -> ()
                 | ConcentrationEffect(dc, t, effects) -> ()
                 | Healing(amt) -> restoreHP (d amt.N amt.DieSize amt.Plus)
-            let action = this.Actions |> Seq.find canUse
-            execute action
-            if hasTrait this ActionSurge && not hasActionSurged then
+            if hasAction then
                 let action = this.Actions |> Seq.find canUse
-                printfn "ACTION SURGE!!"
                 execute action
-                hasActionSurged <- true
-            match this.BonusActions |> Seq.tryFind canUse with
-            | Some(bonus) -> execute bonus
-            | _ -> ()
+                if hasTrait this ActionSurge && not hasActionSurged then
+                    let action = this.Actions |> Seq.find canUse
+                    printfn "ACTION SURGE!!"
+                    execute action
+                    hasActionSurged <- true
+                match this.BonusActions |> Seq.tryFind canUse with
+                | Some(bonus) -> execute bonus
+                | _ -> ()
 
     let rollInit (c: Combatant) =
             d 1 20 c.InitBonus
@@ -266,6 +285,18 @@ let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19
                         Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 12)), 1)
                     ])
 
+// D'Artagnan was created using PHB standard array (15 14 13 12 10 8), variant human Champion 5/Swashbuckler 7, with feat Sharpshooter (not used in this combat); and fighting style Archery. Has a +1 Longbow which isn't used in this fight and a +1 rapier.
+let swash() = Combatant("D'Artagnan the Swashbuckler", (12, 20, 14, 10, 14, 8, 124), AC=18, Traits = [ImprovedCritical; ActionSurge; AthleticsExpertise; SneakAttack(DieRoll.Create(4, 6)); UncannyDodge],
+                    Actions = [
+                        Action.Create("Attack", Attack [
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 6)]))
+                                                                ])
+                    ],
+                    BonusActions = [
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 5)), 1)
+                    ])
+
 
 let fight c1 c2 =
     let rec computeOrder ()=
@@ -309,4 +340,7 @@ let compare opponent friendlyAlternatives =
     for report in avgs do
         printfn "%s" report
 
-compare deathScuzz [shooter; stabber]
+compare earthElemental [shooter; stabber; swash]
+compare deathScuzz [shooter; stabber; swash]
+
+fight (deathScuzz()) (swash())
