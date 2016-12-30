@@ -85,9 +85,8 @@ module Combatants =
         member val Traits = [] with get, set
         member val Resists : DamageType list = [] with get, set
         member private this.TakeDamage n dtype =
-            let n = if dtype = Weapon && hasReaction then
+            let n = if dtype = Weapon && hasTrait this UncannyDodge && this.TryReact() then
                         printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
-                        hasReaction <- false
                         n / 2
                     else n
             if this.Resists |> List.contains dtype then
@@ -171,7 +170,7 @@ module Combatants =
                             printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
                             target.TakeDamage dmg Weapon
                         elif attackRoll + a.ToHit >= target.AC then
-                            if attackRoll + a.ToHit < (target.AC + 4) && target.TryReact() then
+                            if attackRoll + a.ToHit < (target.AC + 4) && hasTrait target DefensiveDuelist && target.TryReact() then
                                 printfn "%s misses %s (parried)" this.Name target.Name
                             else
                                 let dmg = DieRoll.eval (a.Damage |> addSneak)
