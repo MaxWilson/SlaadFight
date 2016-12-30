@@ -334,7 +334,7 @@ let compare opponent friendlyAlternatives =
             let avgHp = ((live |> List.sumBy snd |> float) / (float NumberOfRuns))
             let friend = alt()
             let foe = opponent()
-            yield sprintf "%s wins %d out of 100 matches against %s, with %f HP remaining (%f%% of total)" friend.Name (live |> List.length) foe.Name avgHp (avgHp / float friend.HP * 100.)
+            yield sprintf "%s wins %d out of 100 matches against %s, with %.2f HP remaining (%d%% of total)" friend.Name (live |> List.length) foe.Name avgHp (avgHp / float friend.HP * 100. |> int)
         ]
     for report in avgs do
         printfn "%s" report
