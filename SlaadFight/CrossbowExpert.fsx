@@ -385,10 +385,10 @@ let compare opponents friendlyAlternatives =
             let avgHp = ((live |> List.sumBy snd |> float) / (float NumberOfRuns))
             let friend = alt()
             let foes = System.String.Join(" and ", opponents |> List.map (fun x -> x().Name))
-            yield sprintf "%s wins %d out of 100 matches against %s, with %.2f HP remaining (%d%% of total)" friend.Name (live |> List.length) foes avgHp (avgHp / float friend.HP * 100. |> int)
+            yield sprintf "%s wins %d out of %d matches against %s, with %.2f HP remaining (%d%% of total)" friend.Name (live |> List.length) NumberOfRuns foes avgHp (avgHp / float friend.HP * 100. |> int)
         ]
     for report in avgs do
         printfn "%s" report
 
-compare [banditCaptain] [ogre]
+//compare [banditCaptain] [ogre]
 compare [ogre] [banditCaptain]
