@@ -55,10 +55,10 @@ type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpert
 let mutable AreaIsObscured = false
 module Combatants =
     let statBonus x = if x >= 10 then (x - 10) / 2 else -((11 - x) / 2)
-    let prof = +4 // for this sim, proficiency bonus is +4 for both Slaads and Fighters
 
     type Combatant(name, stats) =
         let str, dex, con, int, wis, cha, maxHP = (stats : int * int * int * int * int * int * int)
+        let mutable prof = +4 // for this sim, proficiency bonus is +4 for both Slaads and Fighters
         let mutable isProne = false
         let mutable isGrappled = false
         let mutable isAfraid = false
@@ -73,6 +73,7 @@ module Combatants =
         let hasTrait (this: Combatant) = flip List.contains this.Traits
         let acrobatics (this: Combatant) = statBonus dex + (if hasTrait this RemarkableAthlete then prof /2 else 0)
         let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsExpertise then prof * 2 elif hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
+        member this.Prof with get() = prof and set v = prof <- v
         member this.Athletics = athletics this
         member this.InitBonus =
             statBonus dex + (if List.contains RemarkableAthlete this.Traits then prof /2 else 0)
@@ -169,12 +170,12 @@ module Combatants =
                                     hasSneakAttacked <- true
                                     sneak :: dmg
                                 | _ -> dmg
-                        if attackRoll = 20 || (attackRoll = 19 && hasTrait this ImprovedCritical) then
+                        if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
                             let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
                             printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
                             target.TakeDamage dmg Weapon
                         elif attackRoll + a.ToHit >= target.AC then
-                            if attackRoll + a.ToHit < (target.AC + 4) && hasTrait target DefensiveDuelist && target.TryReact() then
+                            if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
                                 printfn "%s misses %s (parried)" this.Name target.Name
                             else
                                 let dmg = DieRoll.eval (a.Damage |> addSneak)
@@ -249,8 +250,20 @@ module Combatants =
     type Combatant with
         member this.rollInit = rollInit this
 open Combatants
+let undeadNames = ["Allator"; "Ashem"; "Antema"; "Cashal"; "Cernem"; "Korgol"; "Kotyth"; "Losmig"; "Milogos"; "Mithok"; "Murok"; "Simith"; "Styx"; "Terryth"; "Vörnak"; "Sathmog"; "Angmar"; "Khamul"; "Kurgal"; "Mordeith"; "Lothar"; "Nar"; "Ahriman"; "Mogmol"; "Necromorben"; "Mort"; "Zantaron"; "Tahmar"; "Ymic"; "Angrod"; "Uvatha"; "Suleiman"; "Myrkuul"; "Domex"; "Ziruk"; "Sirakzil"; "Ärek Iilum"; "Embaar"; "Maegul"; "Adonhel"; "Karmgul"; "Uftrak"; "Askator"; "Argator"; "Betegrath"; "Bakhtor"; "Bayr al Adhu"; "Cernetu"; "Castartu"; "Darzatu"; "Dimmu"; "Eriadu"; "Ebenezar"; "Fegamur"; "Fechuntu"; "Githeren"; "Gevalodh"; "Gevudrah"; "Gether Kuhadh"; "Hahkaloth"; "Heikhra"; "Igevurdh"; "Igthengu"; "Jithu"; "Jinnud"; "Kumlakh"; "Kmorduk"; "Lodvathu"; "Laidukh"; "Mogracu"; "Mekhaloth"; "Mekhennum"; "Meknadin"; "Mekinthur"; "Meikru Zoth"; "Nur Zaruth"; "Nur Manthu"; "Nardimmu"; "Nakhaloth"; "Oskatu"; "Okeddur"; "Pekharoth"; "Penetor"; "Pantor"; "Qudlik"; "Qudarrath"; "Revdinator"; "Raitor"; "Sidsheku"; "Saoluthi"; "Sarmas"; "Shek Dimmu"; "Trikhatre"; "Trakhtor"; "Uvekhtu"; "Ur"; "Urathu"; "Vekhithu"; "Valgömu"; "Xomanthu"; "Xirrath"; "Ychekhes"; "Ygirod"; "Zrakhnadar"; "Zeginthu"; "Öknar Hadu"; "Öskogoth"; "Mesamalok"; "Alalar"; "Tagg Klatu"; "Melkior"; "Deathtongue"; "Grind"; "Rend"; "Rotheart"; "Deadflesh"; "Wormwood"; "Dustheart"; "Ashsoul"; "Rotflesh"; "Winterbreath"; "Foulflesh"; "Etter"; "Venomspew"; "Plaguevomit"; "Bonecrush"; "Boneater"; "Femur"; "Foetid"; "Gnarlytooth"; "Plaguewhistler"; "Feartongue"; "Leprosy"; "Scrofula"; "Typhon"; "Banewound"; "Eyeless"; "Eyesore"; "Boneheart"; "Foulslay"; "Soulrend"; "Bitterwind"; "Plaguetooth"; "Plaguetongue"; "Rotbrother"; "Heartrot"; "Sigh"; "Boneshudder"; "Shudder"; "Hollow"; "Heartless"; "Headless"; "Crawler"; "Nightbane"; "Wormvenom"; "Wormfood"; "Wormfriend"; "Unburied"; "Childslay"; "Manhate"; "Manslay"; "Shriek"; "Despair"; "Hopevoid"; "Quickdeath"; "Plaguehope"; "Leperlove"; "Sickpit"; "Plaguepit"; "Deathstink"; "Plaguestink"; "Wormlove"; "Wormplague"; "Lepercrawl"; "Spittle"; "Plaguespittle"; "Gravetongue"; "Eyegrave"; "Gravesoul"; "Gravecaller"; "Deathgrip"; "Skullbreaker"; "Graveskull"; "Tombworm"; "Nightworm"; "Nightheart"; "Chillwind"; "Chillsoul"; "Gravechill"; "Gravespittle"; "Tombspittle"; "Plaguestorm"; "Childfeaster"; "Wormfeast"; "Plaguesoul"; "Plaguesinger"; "Deathlight"; "Puswound"; "Puseye"; "Tombshadow"; "Knucklebones"; "Splitskull"; "Screech"; "Graveschreech"; "Orphaneater"; "Fleshfeaster"; "Carnage"; "Dustsoul"; "Deathgasp"; "Deathjest"]
+let earthNames = ["Stalagmite"; "Stalactite"; "Basalt"; "Granite"; "Onyx"; "Rockheart"; "Stoneheart"; "Deepheart"; "Pebbleheart"; "Boulderheart"; "Caveheart"; "Basaltheart"; "Earthheart"; "Soilheart"; "Gemheart"; "Onyxheart"; "Paleheart"; "Sandheart"; "Pillarheart"; "Twoheart"; "Rockthought"; "Stonethought"; "Deepthought"; "Pebblethought"; "Boulderthought"; "Cavethought"; "Basaltthought"; "Earththought"; "Soilthought"; "Gemthought"; "Palethought"; "Sandthought"; "Pillarthought"; "Twothought"; "Rocksoul"; "Stonesoul"; "Deepsoul"; "Cavesoul"; "Earthsoul"; "Gemsoul"; "Twosoul"; "Caveson"; "Earthson"; "Twoson"; "Rockstrength"; "Stonestrength"; "Deepstrength"; "Pebblestrength"; "Boulderstrength"; "Cavestrength"; "Earthstrength"; "Twostrength"; "Rockhand"; "Stonehand"; "Pebblehand"; "Boulderhand"; "Cavehand"; "Gemhand"; "Palehand"; "Sandhand"; "Onehand"; "Rockspine"; "Stonespine"; "Pebblespine"; "Boulderspine"; "Cavespine"; "Earthspine"; "Gemspine"; "Pillarspine"; "Twospine"; "Rockmind"; "Stonemind"; "Deepmind"; "Pebblemind"; "Bouldermind"; "Cavemind"; "Earthmind"; "Soilmind"; "Palemind"; "Sandmind"; "Pillarmind"; "Rockfinger"; "Stonefinger"; "Pebblefingers"; "Cavefinger"; "Earthfinger"; "Gemfinger"; "Palefingers"; "Sandfinger"; "Pillarfingers"; "Twofinger"; "Rockbone"; "Stonebone"; "Deepbone"; "Pebblebone"; "Cavebone"; "Earthbone"; "Sandbone"; "Pillarbone"; "Twobone"; "Rockeye"; "Stoneeye"; "Deepeye"; "Pebbleeye"; "Eartheye"; "Sandeye"; "Twoeyes"; "Rockmined"; "Stonemined"; "Pebblemined"; "Cavemined"; "Rockborn"; "Stoneborn"; "Deepborn"; "Pebbleborn"; "Boulderborn"; "Caveborn"; "Basaltborn"; "Earthborn"; "Soilborn"; "Gemborn"; "Paleborn"; "Sandborn"; "Pillarborn"; "Rockspawned"; "Stonespawned"; "Deepspawned"; "Pebblespawned"; "Boulderspawned"; "Cavespawned"; "Earthspawned"; "Soilspawned"; "Gemspawned"; "Sandspawned"; "Pillarspawned"; "Twospawned"; "Rockbreaker"; "Stonebreaker"; "Deepbreaker"; "Pebblebreaker"; "Boulderbreaker"; "Cavebreaker"; "Basaltbreaker"; "Earthbreaker"; "Soilbreaker"; "Gembreaker"; "Onyxbreaker"; "Palebreaker"; "Pillarbreaker"; "Twicebreaker"; "Rubyheart"; "Emeraldheart"; "Saphireheart"; "Diamondheart"; "Rubythought"; "Diamondthought"; "Rubysoul"; "Emeraldsoul"; "Diamondsoul"; "Rubymind"; "Emeraldmind"; "Diamondmind"; "Rubyeye"; "Emeraldeye"; "Diamondeye"; "Rubyborn"; "Emeraldborn"; "Saphireborn"; "Diamondborn"; "Rubyspawned"; "Emeraldspawned"; "Saphirespawned"; "Diamondspawned"; "Ruby"; "Emerald"; "Saphire"; "Diamond"; "Stonekiss"; "Pebblekiss"; "Cavekiss"; "Earthkiss"; "Sandkiss"; "Twokiss"; "Olmkiss"; "Rockfriend"; "Stonefriend"; "Deepfriend"; "Pebblefriend"; "Boulderfriend"; "Cavefriend"; "Basaltfriend"; "Earthfriend"; "Soilfriend"; "Gemfriend"; "Onyxfriend"; "Palefriend"; "Sandfriend"; "Pillarfriend"; "Twofriend"; "Olmfriend"]
+let humanNames = ["Ruprecht";"John";"Elias";"Katie";"Kitty";"Lux";"Grizzabella";"Graal Tiger";"Platt";"Rupert Grint";"Daniel Pinkwater";"Maid Marian";"Robin Hood"]
+let giantNames = ["Gronk";"Dank";"Splatt";"Mudd";"Platt";"Ootini";"Grrrronk";"Dredd"]
+let scuzName() =
+    sprintf "%s the Death Scuz" undeadNames.[r.Next(undeadNames.Length)]
+let earthName() =
+    sprintf "%s the Earthling" earthNames.[r.Next(earthNames.Length)]
+let banditName() =
+    sprintf "%s the Bandit Captain" humanNames.[r.Next(humanNames.Length)]
+let ogreName() =
+    sprintf "%s the Ogre" giantNames.[r.Next(giantNames.Length)]
 
-let deathScuzz() = Combatant("Black Beastie", (20, 15, 19, 15, 10, 18, 170), AC=18, Regen=10, Blindsight=true,
+let deathScuzz() = Combatant(scuzName(), (20, 15, 19, 15, 10, 18, 170), AC=18, Regen=10, Blindsight=true,
                      Actions = [
 //                        Action.Create("Cloudkill", ConcentrationEffect(15, All, [Blinded; Damage(SaveForHalf(Con, 15, DieRoll.Create(5,8), Poison))]), 1)
 //                        Action.Create("Fear", ConcentrationEffect(15, EnemyOnly, [Afraid]), 2)
@@ -262,13 +275,29 @@ let deathScuzz() = Combatant("Black Beastie", (20, 15, 19, 15, 10, 18, 170), AC=
 //                        Action.Create("Fireball", Instant(All, SaveForHalf(Dex, 15, DieRoll.Create(8, 6), Fire)), 2)
                      ])
 
-let earthElemental() = Combatant("Gronk the Earthling", (20, 8, 20, 5, 10, 5, 126), AC=17,
+let earthElemental() = Combatant(earthName(), (20, 8, 20, 5, 10, 5, 126), AC=17,
                          Actions = [
                             Action.Create("Multiattack", Attack [
                                                                     Attack.Create "slams" 8 [DieRoll.Create(2, 8, 5)]
                                                                     Attack.Create "slams" 8 [DieRoll.Create(2, 8, 5)]
                                                                     ])
                          ])
+
+let banditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 65), AC=15, Traits = [DefensiveDuelist], Prof = +2,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.Create "slashes" 5 [DieRoll.Create(1, 6, 3)]
+                                                Attack.Create "slashes" 5 [DieRoll.Create(1, 6, 3)]
+                                                Attack.Create "stabs" 5 [DieRoll.Create(1, 4, 3)]
+                                                ])
+                            ])
+
+let ogre() = Combatant(ogreName(), (15, 16, 14, 14, 11, 14, 65), AC=15, Traits = [DefensiveDuelist], Prof = +2,
+                            Actions = [Action.Create("Club attack",
+                                            Attack [
+                                                Attack.Create "smashes" 6 [DieRoll.Create(2, 8, 4)]
+                                                ])
+                            ])
 
 // Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Champion 12, with feats Sharpshooter, Crossbow Expert, and Tough; fighting styles Archery and Defense. Has a +1 Hand Crossbow.
 let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; AthleticsProficient],
@@ -316,48 +345,50 @@ let swash() = Combatant("D'Artagnan the Swashbuckler", (12, 20, 14, 10, 14, 8, 1
                     ])
 
 
-let fight c1 c2 =
-    let rec computeOrder ()=
-        let i1 = rollInit c1
-        let i2 = rollInit c2
-        if i1 > i2 then (c1, c2)
-        elif i2 > i1 then (c2, c1)
-        else computeOrder() // re-roll ties
-    let (c1 : Combatant), (c2: Combatant) = computeOrder() // re-assign in initiative order
+let fight side1 side2 =
+    let all = List.append side1 side2
+    let computeOrder () =
+        // crudely determine initiative order--break ties in arbitrary fashion
+        all |> List.map (fun (x: Combatant) -> x.rollInit, x) |> List.sortByDescending fst |> List.map snd
+    let combatantsInOrder = computeOrder() // re-assign in initiative order
     let takeTurn (c: Combatant) (t: Combatant) =
         ()
     let printStatus (c: Combatant) =
         printfn "%s" (c.Status)
-    while c1.IsAlive && c2.IsAlive do
-        c1.TakeTurn c2
-        if c1.IsAlive && c2.IsAlive then
-            c2.TakeTurn c1
-        printStatus c1
-        printStatus c2
-        c1.newRound()
-        c2.newRound()
+    let hasLive side =
+        side |> List.exists (fun (c: Combatant) -> c.IsAlive)
+    let findOpponent c =
+        let opponents = if List.exists ((=)c) side1 then side2 else side1
+        opponents |> List.tryFind(fun (c: Combatant) -> c.IsAlive)
+    while hasLive side1 && hasLive side2 do
+        for c in combatantsInOrder do
+            if c.IsAlive then
+                match findOpponent c with
+                | Some(opponent) -> c.TakeTurn opponent
+                | None -> ()
+        all |> List.iter printStatus
+        all |> List.iter (fun c -> c.newRound())
 
-let compare opponent friendlyAlternatives =
+let compare opponents friendlyAlternatives =
     let NumberOfRuns = 100
     let avgs = [
         for alt in friendlyAlternatives do
             let results =
                 [for x in 1..NumberOfRuns do
                     let friend : Combatant = alt()
-                    let foe = opponent()
+                    let foes = opponents |> List.map (fun x -> x())
                     printfn "========================\n"
-                    fight friend foe
+                    fight [friend] foes
                     yield friend.IsAlive, friend.HP
                     ]
             let live = results |> List.filter fst
             let avgHp = ((live |> List.sumBy snd |> float) / (float NumberOfRuns))
             let friend = alt()
-            let foe = opponent()
-            yield sprintf "%s wins %d out of 100 matches against %s, with %.2f HP remaining (%d%% of total)" friend.Name (live |> List.length) foe.Name avgHp (avgHp / float friend.HP * 100. |> int)
+            let foes = System.String.Join(" and ", opponents |> List.map (fun x -> x().Name))
+            yield sprintf "%s wins %d out of 100 matches against %s, with %.2f HP remaining (%d%% of total)" friend.Name (live |> List.length) foes avgHp (avgHp / float friend.HP * 100. |> int)
         ]
     for report in avgs do
         printfn "%s" report
 
-compare earthElemental [shooter; stabber; swash]
-compare deathScuzz [shooter; stabber; swash]
-fight (deathScuzz()) (shooter())
+compare [banditCaptain] [ogre]
+compare [ogre] [banditCaptain]
