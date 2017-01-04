@@ -311,7 +311,7 @@ let weakenedBanditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 3
 
 // champion1 was generated using PHB standard array and variant human Fighter 1 with Defense Style and chain mail + shield + longsword and Heavy Armor Master feat
 let champion1() = Combatant(nameOf humanNames "Proto-Champion Brawler", (16, 14, 14, 10, 12, 8, 12), AC=19,
-                            Traits=[HeavyArmorMaster], Prof = +2,
+                            Traits=[], Prof = +2,
                             Actions = [Action.Create("Melee attack",
                                             Attack [
                                                 Attack.Create "slashes" 5 [DieRoll.Create(1, 8, 3)]
@@ -322,7 +322,7 @@ let champion1() = Combatant(nameOf humanNames "Proto-Champion Brawler", (16, 14,
 let archer1() = Combatant(nameOf humanNames "Proto-Champion Archer", (14, 16, 14, 10, 12, 8, 12), AC=15, Prof = +2,
                             Actions = [Action.Create("Shoot",
                                             Attack [
-                                                Attack.BestOf(Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)], Attack.Create "headshots" 2 [DieRoll.Create(1, 10, 3)])
+                                                Attack.BestOf(Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)], Attack.Create "headshots" 2 [DieRoll.Create(1, 10, 13)])
                                                 ])
                                         ]
                             )
@@ -440,3 +440,4 @@ compare [champion1;champion1;archer1;archer1] [banditCaptain]
 compare [champion1;champion1;archer1;archer1] [weakenedBanditCaptain]
 compare [champion1;champion1;rogue1;rogue1] [banditCaptain]
 compare [champion1;champion1;rogue1;rogue1] [weakenedBanditCaptain]
+fight [ogre();ogre()] [champion1();champion1();archer1();archer1()]
