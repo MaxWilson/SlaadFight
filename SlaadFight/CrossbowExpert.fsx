@@ -12,11 +12,12 @@ type DieRoll = { N: int; DieSize: int; Plus: int } with
     static member Create(n, d, x) = { N = n; DieSize = d; Plus = x }
     static member eval (rolls: DieRoll list) =
         rolls |> Seq.sumBy (fun roll -> d roll.N roll.DieSize roll.Plus)
-type DirectAttack = { Text: string; ToHit: int; Damage: DieRoll list }
+type DamageType = Weapon | MagicalWeapon | Poison | Fire
+type DirectAttack = { Text: string; ToHit: int; Damage: DieRoll list; DamageType: DamageType }
 type Attack = Direct of DirectAttack | Grapple | ShoveProne | BestOf of Attack * Attack with
-    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d }
+    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = Weapon }
+    static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon }
 type AoETarget = All | EnemyOnly
-type DamageType = Weapon | Poison | Fire
 type SaveAbility = Dex | Con
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
 type Effect = Afraid | Blinded | Damage of Damage
@@ -51,6 +52,7 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
+             | HeavyArmorMaster
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -87,10 +89,15 @@ module Combatants =
         member val Traits = [] with get, set
         member val Resists : DamageType list = [] with get, set
         member private this.TakeDamage n dtype =
-            let n = if dtype = Weapon && hasTrait this UncannyDodge && this.TryReact() then
+            let n = if (dtype = Weapon || dtype = MagicalWeapon) && hasTrait this UncannyDodge && this.TryReact() then
                         printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
                         n / 2
                     else n
+            let n = if dtype = Weapon && hasTrait this HeavyArmorMaster then
+                        printfn "Heavy Armor Master! Damaged reduced from %d to %d" n (n-3)
+                        n - 3
+                    else
+                        n
             if this.Resists |> List.contains dtype then
                 printfn "%s takes %d points of damage! (Halved from %d for %A resistance)" this.Name (n/2) n dtype
                 hp <- hp - n/2
@@ -173,14 +180,14 @@ module Combatants =
                         if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
                             let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
                             printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
-                            target.TakeDamage dmg Weapon
+                            target.TakeDamage dmg a.DamageType
                         elif attackRoll + a.ToHit >= target.AC then
                             if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
                                 printfn "%s misses %s (parried)" this.Name target.Name
                             else
                                 let dmg = DieRoll.eval (a.Damage |> addSneak)
                                 printf "Hit! %s %s %s: " this.Name a.Text target.Name
-                                target.TakeDamage dmg Weapon
+                                target.TakeDamage dmg a.DamageType
                         else
                             printfn "%s misses %s" this.Name target.Name
                     | BestOf(a1, a2) ->
@@ -254,28 +261,27 @@ let undeadNames = ["Allator"; "Ashem"; "Antema"; "Cashal"; "Cernem"; "Korgol"; "
 let earthNames = ["Stalagmite"; "Stalactite"; "Basalt"; "Granite"; "Onyx"; "Rockheart"; "Stoneheart"; "Deepheart"; "Pebbleheart"; "Boulderheart"; "Caveheart"; "Basaltheart"; "Earthheart"; "Soilheart"; "Gemheart"; "Onyxheart"; "Paleheart"; "Sandheart"; "Pillarheart"; "Twoheart"; "Rockthought"; "Stonethought"; "Deepthought"; "Pebblethought"; "Boulderthought"; "Cavethought"; "Basaltthought"; "Earththought"; "Soilthought"; "Gemthought"; "Palethought"; "Sandthought"; "Pillarthought"; "Twothought"; "Rocksoul"; "Stonesoul"; "Deepsoul"; "Cavesoul"; "Earthsoul"; "Gemsoul"; "Twosoul"; "Caveson"; "Earthson"; "Twoson"; "Rockstrength"; "Stonestrength"; "Deepstrength"; "Pebblestrength"; "Boulderstrength"; "Cavestrength"; "Earthstrength"; "Twostrength"; "Rockhand"; "Stonehand"; "Pebblehand"; "Boulderhand"; "Cavehand"; "Gemhand"; "Palehand"; "Sandhand"; "Onehand"; "Rockspine"; "Stonespine"; "Pebblespine"; "Boulderspine"; "Cavespine"; "Earthspine"; "Gemspine"; "Pillarspine"; "Twospine"; "Rockmind"; "Stonemind"; "Deepmind"; "Pebblemind"; "Bouldermind"; "Cavemind"; "Earthmind"; "Soilmind"; "Palemind"; "Sandmind"; "Pillarmind"; "Rockfinger"; "Stonefinger"; "Pebblefingers"; "Cavefinger"; "Earthfinger"; "Gemfinger"; "Palefingers"; "Sandfinger"; "Pillarfingers"; "Twofinger"; "Rockbone"; "Stonebone"; "Deepbone"; "Pebblebone"; "Cavebone"; "Earthbone"; "Sandbone"; "Pillarbone"; "Twobone"; "Rockeye"; "Stoneeye"; "Deepeye"; "Pebbleeye"; "Eartheye"; "Sandeye"; "Twoeyes"; "Rockmined"; "Stonemined"; "Pebblemined"; "Cavemined"; "Rockborn"; "Stoneborn"; "Deepborn"; "Pebbleborn"; "Boulderborn"; "Caveborn"; "Basaltborn"; "Earthborn"; "Soilborn"; "Gemborn"; "Paleborn"; "Sandborn"; "Pillarborn"; "Rockspawned"; "Stonespawned"; "Deepspawned"; "Pebblespawned"; "Boulderspawned"; "Cavespawned"; "Earthspawned"; "Soilspawned"; "Gemspawned"; "Sandspawned"; "Pillarspawned"; "Twospawned"; "Rockbreaker"; "Stonebreaker"; "Deepbreaker"; "Pebblebreaker"; "Boulderbreaker"; "Cavebreaker"; "Basaltbreaker"; "Earthbreaker"; "Soilbreaker"; "Gembreaker"; "Onyxbreaker"; "Palebreaker"; "Pillarbreaker"; "Twicebreaker"; "Rubyheart"; "Emeraldheart"; "Saphireheart"; "Diamondheart"; "Rubythought"; "Diamondthought"; "Rubysoul"; "Emeraldsoul"; "Diamondsoul"; "Rubymind"; "Emeraldmind"; "Diamondmind"; "Rubyeye"; "Emeraldeye"; "Diamondeye"; "Rubyborn"; "Emeraldborn"; "Saphireborn"; "Diamondborn"; "Rubyspawned"; "Emeraldspawned"; "Saphirespawned"; "Diamondspawned"; "Ruby"; "Emerald"; "Saphire"; "Diamond"; "Stonekiss"; "Pebblekiss"; "Cavekiss"; "Earthkiss"; "Sandkiss"; "Twokiss"; "Olmkiss"; "Rockfriend"; "Stonefriend"; "Deepfriend"; "Pebblefriend"; "Boulderfriend"; "Cavefriend"; "Basaltfriend"; "Earthfriend"; "Soilfriend"; "Gemfriend"; "Onyxfriend"; "Palefriend"; "Sandfriend"; "Pillarfriend"; "Twofriend"; "Olmfriend"]
 let humanNames = ["Ruprecht";"John";"Elias";"Katie";"Kitty";"Lux";"Grizzabella";"Graal Tiger";"Platt";"Rupert Grint";"Daniel Pinkwater";"Maid Marian";"Robin Hood"]
 let giantNames = ["Gronk";"Dank";"Splatt";"Mudd";"Platt";"Ootini";"Grrrronk";"Dredd"]
+let nameOf (lst: _ list) title =
+    sprintf "%s the %s" lst.[r.Next(lst.Length)] title
 let scuzName() =
-    sprintf "%s the Death Scuz" undeadNames.[r.Next(undeadNames.Length)]
-let earthName() =
-    sprintf "%s the Earthling" earthNames.[r.Next(earthNames.Length)]
-let banditName() =
-    sprintf "%s the Bandit Captain" humanNames.[r.Next(humanNames.Length)]
-let ogreName() =
-    sprintf "%s the Ogre" giantNames.[r.Next(giantNames.Length)]
+    nameOf undeadNames "Death Scuz"
+let earthName() = nameOf earthNames "Earthling"
+let banditName() = nameOf humanNames "Bandit Captain"
+let ogreName() = nameOf giantNames "Ogre"
 
-let deathScuzz() = Combatant(scuzName(), (20, 15, 19, 15, 10, 18, 170), AC=18, Regen=10, Blindsight=true,
+let deathScuzz() = Combatant(scuzName(), (20, 15, 19, 15, 10, 18, 170), AC=18, Regen=10, Blindsight=true, Resists = [Fire],
                      Actions = [
 //                        Action.Create("Cloudkill", ConcentrationEffect(15, All, [Blinded; Damage(SaveForHalf(Con, 15, DieRoll.Create(5,8), Poison))]), 1)
 //                        Action.Create("Fear", ConcentrationEffect(15, EnemyOnly, [Afraid]), 2)
                         Action.Create("Multiattack", Attack [
-                                                                Attack.Create "bites" 9 [DieRoll.Create(1, 8, 5); DieRoll.Create(2, 6)]
-                                                                Attack.Create "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
-                                                                Attack.Create "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
+                                                                Attack.CreateMagic "bites" 9 [DieRoll.Create(1, 8, 5); DieRoll.Create(2, 6)]
+                                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
+                                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 6, 5); DieRoll.Create(2, 6)]
                                                                 ])
 //                        Action.Create("Fireball", Instant(All, SaveForHalf(Dex, 15, DieRoll.Create(8, 6), Fire)), 2)
                      ])
 
-let earthElemental() = Combatant(earthName(), (20, 8, 20, 5, 10, 5, 126), AC=17,
+let earthElemental() = Combatant(earthName(), (20, 8, 20, 5, 10, 5, 126), AC=17, Resists = [Weapon],
                          Actions = [
                             Action.Create("Multiattack", Attack [
                                                                     Attack.Create "slams" 8 [DieRoll.Create(2, 8, 5)]
@@ -292,7 +298,36 @@ let banditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 65), AC=1
                                                 ])
                             ])
 
-let ogre() = Combatant(ogreName(), (15, 16, 14, 14, 11, 14, 65), AC=11, Traits = [DefensiveDuelist], Prof = +2,
+let weakenedBanditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 39), AC=15,
+                                Traits = [DefensiveDuelist], Prof = +2,
+                                Actions = [Action.Create("Melee attack",
+                                                Attack [
+                                                    Attack.Create "slashes" 5 [DieRoll.Create(1, 6, 3)]
+                                                    Attack.Create "slashes" 5 [DieRoll.Create(1, 6, 3)]
+                                                    Attack.Create "stabs" 5 [DieRoll.Create(1, 4, 3)]
+                                                    ])
+                                ])
+
+// champion1 was generated using PHB standard array and variant human Fighter 1 with Defense Style and chain mail + shield + longsword and Heavy Armor Master feat
+let champion1() = Combatant(nameOf humanNames "Proto-Champion Brawler", (16, 14, 14, 10, 12, 8, 12), AC=19,
+                            Traits=[HeavyArmorMaster], Prof = +2,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.Create "slashes" 5 [DieRoll.Create(1, 8, 3)]
+                                                ])
+                                       ]
+                            )
+// archer1 was generated using PHB standard array and variant human Fighter 1 with Archery Style and studded leather and heavy crossbow and Sharpshooter feat
+let archer1() = Combatant(nameOf humanNames "Proto-Champion Archer", (14, 16, 14, 10, 12, 8, 12), AC=15, Prof = +2,
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.BestOf(Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)], Attack.Create "headshots" 2 [DieRoll.Create(1, 10, 3)])
+                                                Attack.Create "slashes" 5 [DieRoll.Create(1, 8, 3)]
+                                                ])
+                                        ]
+                            )
+
+let ogre() = Combatant(ogreName(), (19, 8, 16, 5, 7, 7, 59), AC=11, Traits = [], Prof = +2,
                             Actions = [Action.Create("Club attack",
                                             Attack [
                                                 Attack.Create "smashes" 6 [DieRoll.Create(2, 8, 4)]
@@ -303,14 +338,14 @@ let ogre() = Combatant(ogreName(), (15, 16, 14, 14, 11, 14, 65), AC=11, Traits =
 let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; AthleticsProficient],
                     Actions = [
                         Action.Create("Crossbow Attack", Attack [
-                                                                BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
-                                                                BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
-                                                                BestOf (Attack.Create "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.Create "shoots" 12 [DieRoll.Create(1, 6, 6)])
+                                                                BestOf (Attack.CreateMagic "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.CreateMagic "shoots" 12 [DieRoll.Create(1, 6, 6)])
+                                                                BestOf (Attack.CreateMagic "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.CreateMagic "shoots" 12 [DieRoll.Create(1, 6, 6)])
+                                                                BestOf (Attack.CreateMagic "headshots" 7 [DieRoll.Create(1, 6, 16)], Attack.CreateMagic "shoots" 12 [DieRoll.Create(1, 6, 6)])
                                                                 ])
                         Action.Create("Rapier Attack", Attack [
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 6, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 6, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 6, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 6, 6)]))
                                                                 ])
                     ],
                     BonusActions = [
@@ -323,9 +358,9 @@ let shooter() = Combatant("Rufus the Archer", (12, 20, 14, 10, 14, 8, 124), AC=1
 let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19, Traits = [DefensiveDuelist; MageSlayer; RemarkableAthlete; AthleticsProficient; ImprovedCritical; ActionSurge],
                     Actions = [
                         Action.Create("Attack", Attack [
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 8)]))
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 8)]))
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 8)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 8, 8)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 8, 8)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 8, 8)]))
                                                                 ])
                     ],
                     BonusActions = [
@@ -336,8 +371,8 @@ let stabber() = Combatant("Brutus the Tank", (20, 12, 14, 10, 14, 8, 124), AC=19
 let swash() = Combatant("D'Artagnan the Swashbuckler", (12, 20, 14, 10, 14, 8, 124), AC=18, Traits = [ImprovedCritical; ActionSurge; AthleticsExpertise; SneakAttack(DieRoll.Create(4, 6)); UncannyDodge],
                     Actions = [
                         Action.Create("Attack", Attack [
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 6)]))
-                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.Create "stabs" 10 [DieRoll.Create(1, 8, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 8, 6)]))
+                                                                BestOf (Grapple, BestOf(ShoveProne, Attack.CreateMagic "stabs" 10 [DieRoll.Create(1, 8, 6)]))
                                                                 ])
                     ],
                     BonusActions = [
@@ -392,3 +427,5 @@ let compare opponents friendlyAlternatives =
 
 //compare [banditCaptain] [ogre]
 compare [ogre] [banditCaptain]
+compare [champion1;champion1;archer1;archer1] [banditCaptain]
+compare [champion1;champion1;archer1;archer1] [weakenedBanditCaptain]
