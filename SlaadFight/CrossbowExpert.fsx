@@ -298,6 +298,7 @@ let banditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 65), AC=1
                                                 ])
                             ])
 
+// same as bandit captain but with fewer HP
 let weakenedBanditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 39), AC=15,
                                 Traits = [DefensiveDuelist], Prof = +2,
                                 Actions = [Action.Create("Melee attack",
@@ -322,7 +323,15 @@ let archer1() = Combatant(nameOf humanNames "Proto-Champion Archer", (14, 16, 14
                             Actions = [Action.Create("Shoot",
                                             Attack [
                                                 Attack.BestOf(Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)], Attack.Create "headshots" 2 [DieRoll.Create(1, 10, 3)])
-                                                Attack.Create "slashes" 5 [DieRoll.Create(1, 8, 3)]
+                                                ])
+                                        ]
+                            )
+
+// rogue1 was generated using PHB standard array and variant human Rogue 1 with studded leather and light crossbow and Skulker feat (doesn't factor into this fight)
+let rogue1() = Combatant(nameOf humanNames "Rogue", (10, 16, 14, 14, 12, 8, 12), AC=15, Prof = +2, Traits=[SneakAttack(DieRoll.Create(1, 6))],
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.Create "shoots" 5 [DieRoll.Create(1, 10, 3)]
                                                 ])
                                         ]
                             )
@@ -429,3 +438,5 @@ let compare opponents friendlyAlternatives =
 compare [ogre] [banditCaptain]
 compare [champion1;champion1;archer1;archer1] [banditCaptain]
 compare [champion1;champion1;archer1;archer1] [weakenedBanditCaptain]
+compare [champion1;champion1;rogue1;rogue1] [banditCaptain]
+compare [champion1;champion1;rogue1;rogue1] [weakenedBanditCaptain]
