@@ -292,7 +292,7 @@ let banditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 65), AC=1
                                                 ])
                             ])
 
-let ogre() = Combatant(ogreName(), (15, 16, 14, 14, 11, 14, 65), AC=15, Traits = [DefensiveDuelist], Prof = +2,
+let ogre() = Combatant(ogreName(), (15, 16, 14, 14, 11, 14, 65), AC=11, Traits = [DefensiveDuelist], Prof = +2,
                             Actions = [Action.Create("Club attack",
                                             Attack [
                                                 Attack.Create "smashes" 6 [DieRoll.Create(2, 8, 4)]
