@@ -13,14 +13,15 @@ type DieRoll = { N: int; DieSize: int; Plus: int } with
     static member eval (rolls: DieRoll list) =
         rolls |> Seq.sumBy (fun roll -> d roll.N roll.DieSize roll.Plus)
 type DamageType = Weapon | MagicalWeapon | Poison | Fire
-type DirectAttack = { Text: string; ToHit: int; Damage: DieRoll list; DamageType: DamageType }
-type Attack = Direct of DirectAttack | Grapple | ShoveProne | BestOf of Attack * Attack with
-    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = Weapon }
-    static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon }
-type AoETarget = All | EnemyOnly
 type SaveAbility = Dex | Con
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
-type Effect = Afraid | Blinded | Damage of Damage
+type Effect = Afraid | Blinded | Damage of Damage | Constrict of DieRoll
+type DirectAttack = { Text: string; ToHit: int; Damage: DieRoll list; DamageType: DamageType; Rider: Effect option }
+type Attack = Direct of DirectAttack | Grapple | ShoveProne | BestOf of Attack * Attack with
+    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = Weapon; Rider = None }
+    static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon; Rider = None }
+    static member CreateMagicWithRider descriptor t d rider = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon; Rider = Some rider }
+type AoETarget = All | EnemyOnly
 type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll | BreakFree
 type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option; } with
     static member Create (name, effect) = { Name = name; Effect = effect; UsesRemaining = None }
@@ -52,7 +53,7 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
-             | HeavyArmorMaster
+             | HeavyArmorMaster | Reactive
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -70,6 +71,7 @@ module Combatants =
         let mutable hasAction = true
         let mutable hp = maxHP
         let mutable hasSneakAttacked = false
+        let mutable isRestrained = false
         let restoreHP n =
             hp <- min maxHP (hp + n)
         let hasTrait (this: Combatant) = flip List.contains this.Traits
@@ -88,7 +90,8 @@ module Combatants =
         member val BonusActions = [] with get, set
         member val Traits = [] with get, set
         member val Resists : DamageType list = [] with get, set
-        member private this.TakeDamage n dtype =
+        member this.IsRestrained = isRestrained
+        member private this.TakeDamage n dtype rider =
             let n = if (dtype = Weapon || dtype = MagicalWeapon) && hasTrait this UncannyDodge && this.TryReact() then
                         printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
                         n / 2
@@ -104,6 +107,12 @@ module Combatants =
             else
                 printfn "%s takes %d points of damage!" this.Name n
                 hp <- hp - n
+            match rider with
+            | Some(Constrict(_)) ->
+                printfn "%s is restrained!" this.Name
+                isRestrained <- true
+            | None -> ()
+            | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
         member private this.IsProne = isProne
         member private this.IsGrappled = isGrappled
         member private this.IsBlinded = AreaIsObscured && not this.Blindsight
@@ -120,6 +129,9 @@ module Combatants =
                 true
             else
                 false
+        member this.newTurn() =
+            if hasTrait this Reactive then
+                hasReaction <- true
         member private this.TryGrapple offensiveRoll =
             let bonus = max (acrobatics this) (athletics this)
             if d20 Regular + bonus < offensiveRoll then
@@ -135,7 +147,7 @@ module Combatants =
             else
                 printfn "%s avoids shove." this.Name
         member this.Status =
-            let statusEffects = if isGrappled && isProne then "(grappled, prone)" elif isGrappled then "(grappled)" elif isProne then "(prone)" else null
+            let statusEffects = if isRestrained then "(restrained)" elif isGrappled && isProne then "(grappled, prone)" elif isGrappled then "(grappled)" elif isProne then "(prone)" else null
             if statusEffects <> null then
                 sprintf "%s: %d HP (%d damage taken) %s" this.Name hp (maxHP - hp) statusEffects
             else
@@ -155,8 +167,8 @@ module Combatants =
                 if a.UsesRemaining.IsSome then
                     a.UsesRemaining <- Some(a.UsesRemaining.Value - 1)
                 let attackerStatus =
-                    let hasAdvantage = target.IsProne || target.IsBlinded
-                    let hasDisadvantage = this.IsProne || this.IsBlinded || isAfraid
+                    let hasAdvantage = target.IsProne || target.IsBlinded || target.IsRestrained
+                    let hasDisadvantage = isProne|| isRestrained || this.IsBlinded || isAfraid
                     match hasAdvantage, hasDisadvantage with
                     | true, false -> Advantage
                     | false, true -> Disadvantage
@@ -164,32 +176,37 @@ module Combatants =
                 let rec executeAttack a =
                     match a with
                     | Direct(a) ->
-                        let attackRoll = d20 attackerStatus
-                        printfn "Roll: %d" attackRoll
-                        // add sneak attack damage once per round if SneakAttack trait exists
-                        let addSneak dmg =
-                            if hasSneakAttacked then
-                                dmg
+                        match a.Rider with
+                        | Some (Constrict(dmg)) when target.IsRestrained ->
+                            printf "Autohit! %s squeezes %s" this.Name target.Name
+                            target.TakeDamage (DieRoll.eval a.Damage) a.DamageType a.Rider
+                        | _ ->
+                            let attackRoll = d20 attackerStatus
+                            printfn "Roll: %d" attackRoll
+                            // add sneak attack damage once per round if SneakAttack trait exists
+                            let addSneak dmg =
+                                if hasSneakAttacked then
+                                    dmg
+                                else
+                                    match this.Traits |> List.tryFind (function SneakAttack(_) -> true | _ -> false) with
+                                    | Some(SneakAttack(sneak)) ->
+                                        printfn "SNEAK ATTACK!"
+                                        hasSneakAttacked <- true
+                                        sneak :: dmg
+                                    | _ -> dmg
+                            if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
+                                let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
+                                printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
+                                target.TakeDamage dmg a.DamageType a.Rider
+                            elif attackRoll + a.ToHit >= target.AC then
+                                if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
+                                    printfn "%s misses %s (parried)" this.Name target.Name
+                                else
+                                    let dmg = DieRoll.eval (a.Damage |> addSneak)
+                                    printf "Hit! %s %s %s: " this.Name a.Text target.Name
+                                    target.TakeDamage dmg a.DamageType a.Rider
                             else
-                                match this.Traits |> List.tryFind (function SneakAttack(_) -> true | _ -> false) with
-                                | Some(SneakAttack(sneak)) ->
-                                    printfn "SNEAK ATTACK!"
-                                    hasSneakAttacked <- true
-                                    sneak :: dmg
-                                | _ -> dmg
-                        if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
-                            let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
-                            printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
-                            target.TakeDamage dmg a.DamageType
-                        elif attackRoll + a.ToHit >= target.AC then
-                            if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
-                                printfn "%s misses %s (parried)" this.Name target.Name
-                            else
-                                let dmg = DieRoll.eval (a.Damage |> addSneak)
-                                printf "Hit! %s %s %s: " this.Name a.Text target.Name
-                                target.TakeDamage dmg a.DamageType
-                        else
-                            printfn "%s misses %s" this.Name target.Name
+                                printfn "%s misses %s" this.Name target.Name
                     | BestOf(a1, a2) ->
                         // we invent an ad hoc priority scheme for which attacks are "better": grappling is better against a non-grappled target; then pushing a non-prone target; then whatever attack has the highest expected damage
                         let rec bestOf a1 a2 =
@@ -237,6 +254,7 @@ module Combatants =
                         printfn "%s breaks free! (%d beats %d)" this.Name me him
                         isGrappled <- false
                         isProne <- false
+                        isRestrained <- false
                     else
                         printfn "%s cannot break free! (%d does not beat %d)" this.Name me him
             if hasAction then
@@ -311,21 +329,102 @@ let weakenedBanditCaptain() = Combatant(banditName(), (15, 16, 14, 14, 11, 14, 3
 
 // champion1 was generated using PHB standard array and variant human Fighter 1 with Defense Style and chain mail + shield + longsword and Heavy Armor Master feat
 let champion1() = Combatant(nameOf humanNames "Proto-Champion Brawler", (16, 14, 14, 10, 12, 8, 12), AC=19,
-                            Traits=[], Prof = +2,
+                            Traits=[HeavyArmorMaster], Prof = +2,
                             Actions = [Action.Create("Melee attack",
                                             Attack [
                                                 Attack.Create "slashes" 5 [DieRoll.Create(1, 8, 3)]
                                                 ])
-                                       ]
-                            )
+                                       ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                            ])
 // archer1 was generated using PHB standard array and variant human Fighter 1 with Archery Style and studded leather and heavy crossbow and Sharpshooter feat
 let archer1() = Combatant(nameOf humanNames "Proto-Champion Archer", (14, 16, 14, 10, 12, 8, 12), AC=15, Prof = +2,
                             Actions = [Action.Create("Shoot",
                                             Attack [
                                                 Attack.BestOf(Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)], Attack.Create "headshots" 2 [DieRoll.Create(1, 10, 13)])
                                                 ])
-                                        ]
-                            )
+                                        ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                            ])
+
+// champion5 was generated using PHB standard array and variant human Fighter 5 with Dueling Style and plate armor + shield + nonmagical longsword and Heavy Armor Master feat
+let champion5() = Combatant(nameOf humanNames "Champion", (19, 14, 14, 10, 12, 8, 44), AC=20,
+                            Traits=[HeavyArmorMaster; ActionSurge; AthleticsProficient; ImprovedCritical], Prof = +3,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.Create "slashes" 7 [DieRoll.Create(1, 8, 4)]
+                                                Attack.Create "slashes" 7 [DieRoll.Create(1, 8, 4)]
+                                                ])
+                                       ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 5)), 1)
+                            ])
+// archer5 was generated using PHB standard array and variant human Fighter 5 with Archery Style and studded leather and nonmagical longbow +0 and Sharpshooter feat
+let archer5() = Combatant(nameOf humanNames "Archer", (14, 18, 14, 10, 12, 8, 44), AC=16, Prof = +3,
+                            Traits=[ActionSurge; AthleticsProficient; ImprovedCritical],
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.BestOf(Attack.Create "shoots" 9 [DieRoll.Create(1, 8, 4)], Attack.Create "headshots" 4 [DieRoll.Create(1, 8, 14)])
+                                                Attack.BestOf(Attack.Create "shoots" 9 [DieRoll.Create(1, 8, 4)], Attack.Create "headshots" 4 [DieRoll.Create(1, 8, 14)])
+                                                ])
+                                        ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 5)), 1)
+                            ])
+
+// champion9 was generated using PHB standard array and variant human Fighter 5 with Dueling Style and plate armor + shield + nonmagical longsword and Heavy Armor Master feat
+let champion9() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 8, 76), AC=20,
+                            Traits=[HeavyArmorMaster; ActionSurge; AthleticsProficient; ImprovedCritical], Prof = +4,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.Create "slashes" 9 [DieRoll.Create(1, 8, 5)]
+                                                Attack.Create "slashes" 9 [DieRoll.Create(1, 8, 5)]
+                                                ])
+                                       ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
+                            ])
+// archer9 was generated using PHB standard array and variant human Fighter 5 with Archery Style and studded leather and nonmagical longbow and Sharpshooter feat
+let archer9() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 76), AC=17, Prof = +4,
+                            Traits=[ActionSurge; AthleticsProficient; ImprovedCritical],
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.BestOf(Attack.Create "shoots" 11 [DieRoll.Create(1, 8, 5)], Attack.Create "headshots" 6 [DieRoll.Create(1, 8, 15)])
+                                                Attack.BestOf(Attack.Create "shoots" 11 [DieRoll.Create(1, 8, 5)], Attack.Create "headshots" 6 [DieRoll.Create(1, 8, 15)])
+                                                ])
+                                        ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
+                            ])
+
+// champion9b was generated using PHB standard array and variant human Fighter 5 with Dueling Style and plate armor + shield + longsword +1 and Heavy Armor Master feat
+let champion9b() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 8, 76), AC=18,
+                            Traits=[HeavyArmorMaster; ActionSurge; AthleticsProficient; ImprovedCritical], Prof = +4,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.CreateMagic "slashes" 10 [DieRoll.Create(1, 8, 6)]
+                                                Attack.CreateMagic "slashes" 10 [DieRoll.Create(1, 8, 6)]
+                                                ])
+                                       ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
+                            ])
+// archer9b was generated using PHB standard array and variant human Fighter 5 with Archery Style and studded leather and longbow +1 and Sharpshooter feat
+let archer9b() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 76), AC=17, Prof = +4,
+                            Traits=[ActionSurge; AthleticsProficient; ImprovedCritical],
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.BestOf(Attack.CreateMagic "shoots" 12 [DieRoll.Create(1, 8, 6)], Attack.CreateMagic "headshots" 7 [DieRoll.Create(1, 8, 16)])
+                                                Attack.BestOf(Attack.CreateMagic "shoots" 12 [DieRoll.Create(1, 8, 6)], Attack.CreateMagic "headshots" 7 [DieRoll.Create(1, 8, 16)])
+                                                ])
+                                        ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
+                            ])
+
+
 
 // rogue1 was generated using PHB standard array and variant human Rogue 1 with studded leather and light crossbow and Skulker feat (doesn't factor into this fight)
 let rogue1() = Combatant(nameOf humanNames "Rogue", (10, 16, 14, 14, 12, 8, 12), AC=15, Prof = +2, Traits=[SneakAttack(DieRoll.Create(1, 6))],
@@ -340,6 +439,19 @@ let ogre() = Combatant(ogreName(), (19, 8, 16, 5, 7, 7, 59), AC=11, Traits = [],
                             Actions = [Action.Create("Club attack",
                                             Attack [
                                                 Attack.Create "smashes" 6 [DieRoll.Create(2, 8, 4)]
+                                                ])
+                            ])
+
+let marilith() = Combatant(nameOf undeadNames "Marilith", (18, 20, 20, 18, 16, 20, 189), AC=18, Traits = [DefensiveDuelist;Reactive], Resists = [Weapon], Prof = +5,
+                            Actions = [Action.Create("Multiattack",
+                                            Attack [
+                                                Attack.CreateMagicWithRider "constricts" 9 [DieRoll.Create(2, 10, 4)] (Constrict (DieRoll.Create(2, 10, 4)))
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
+                                                Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 8, 4)]
                                                 ])
                             ])
 
@@ -410,6 +522,7 @@ let fight side1 side2 =
                 match findOpponent c with
                 | Some(opponent) -> c.TakeTurn opponent
                 | None -> ()
+            all |> List.iter (fun c -> c.newTurn())
         all |> List.iter printStatus
         all |> List.iter (fun c -> c.newRound())
 
@@ -434,6 +547,23 @@ let compare opponents friendlyAlternatives =
     for report in avgs do
         printfn "%s" report
 
+let evalGroup opponents friendlies =
+    let NumberOfRuns = 100
+    let results =
+        [for x in 1..NumberOfRuns do
+            let friends : Combatant list = friendlies |> List.map (fun f -> f())
+            let foes = opponents |> List.map (fun x -> x())
+            printfn "========================\n"
+            fight friends foes
+            yield (friends |> List.exists (fun (c: Combatant) -> c.IsAlive)), (friends |> List.filter (fun (c:Combatant) -> c.IsAlive) |> List.length)
+            ]
+    let live = results |> List.filter fst
+    let avgStillAlive = ((live |> List.sumBy snd |> float) / (float NumberOfRuns))
+    let friends = System.String.Join(" and ", friendlies |> List.map (fun x -> (x() : Combatant).Name))
+    let foes = System.String.Join(" and ", opponents |> List.map (fun x -> x().Name))
+    let averageSurviving = ((live |> List.map snd |> List.sum |> float) / float (List.length live))
+    printfn "%s win %d out of %d matches against %s, with %.2f members still alive on average" friends (live |> List.length) NumberOfRuns foes averageSurviving
+
 //compare [banditCaptain] [ogre]
 compare [ogre] [banditCaptain]
 compare [champion1;champion1;archer1;archer1] [banditCaptain]
@@ -441,3 +571,10 @@ compare [champion1;champion1;archer1;archer1] [weakenedBanditCaptain]
 compare [champion1;champion1;rogue1;rogue1] [banditCaptain]
 compare [champion1;champion1;rogue1;rogue1] [weakenedBanditCaptain]
 fight [ogre();ogre()] [champion1();champion1();archer1();archer1()]
+evalGroup [marilith] [champion1;champion1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;]
+evalGroup [marilith] [champion5;champion5;archer5;archer5]
+evalGroup [marilith] [champion5;champion5;champion5;champion5;archer5;archer5;archer5;archer5]
+evalGroup [marilith] [champion9;champion9;archer9;archer9]
+evalGroup [marilith] [champion9b;champion9b;archer9b;archer9b]
+evalGroup [marilith] [champion9b;champion9b;archer9b;archer9b;archer9b]
+evalGroup [marilith] [shooter;shooter;shooter;shooter]
