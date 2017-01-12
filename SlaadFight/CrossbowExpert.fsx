@@ -53,7 +53,7 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
-             | HeavyArmorMaster | Reactive
+             | HeavyArmorMaster | Reactive | ShieldSpell
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -77,6 +77,7 @@ module Combatants =
         let hasTrait (this: Combatant) = flip List.contains this.Traits
         let acrobatics (this: Combatant) = statBonus dex + (if hasTrait this RemarkableAthlete then prof /2 else 0)
         let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsExpertise then prof * 2 elif hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
+        let mutable isShielding = false
         member this.Prof with get() = prof and set v = prof <- v
         member this.Athletics = athletics this
         member this.InitBonus =
@@ -117,15 +118,26 @@ module Combatants =
         member private this.IsGrappled = isGrappled
         member private this.IsBlinded = AreaIsObscured && not this.Blindsight
         member this.HP = hp
+        member val SP = 0 with get, set
         member this.newRound() =
             hasReaction <- true
             hasAction <- true
             hasSneakAttacked <- false
+            isShielding <- false
             if this.Regen > 0 then
                 restoreHP this.Regen
         member this.TryReact() =
             if hasReaction then
                 hasReaction <- false
+                true
+            else
+                false
+        member this.TryShield() =
+            if isShielding then
+                true
+            elif hasTrait this ShieldSpell && this.SP >= 2 && this.TryReact() then
+                this.SP <- this.SP - 1
+                isShielding <- true
                 true
             else
                 false
@@ -201,6 +213,8 @@ module Combatants =
                             elif attackRoll + a.ToHit >= target.AC then
                                 if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
                                     printfn "%s misses %s (parried)" this.Name target.Name
+                                elif attackRoll + a.ToHit < (target.AC + 5) && hasTrait target ShieldSpell && target.TryShield() then
+                                    printfn "%s misses %s (Shield)" this.Name target.Name
                                 else
                                     let dmg = DieRoll.eval (a.Damage |> addSneak)
                                     printf "Hit! %s %s %s: " this.Name a.Text target.Name
@@ -424,6 +438,30 @@ let archer9b() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 7
                                 Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
                             ])
 
+// champion8b was generated using PHB standard array and variant human Fighter 5 with Dueling Style and plate armor + shield + longsword +1 and Heavy Armor Master feat
+let champion8b() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 8, 68), AC=18,
+                            Traits=[HeavyArmorMaster; ActionSurge; AthleticsProficient; ImprovedCritical], Prof = +3,
+                            Actions = [Action.Create("Melee attack",
+                                            Attack [
+                                                Attack.CreateMagic "slashes" 9 [DieRoll.Create(1, 8, 6)]
+                                                Attack.CreateMagic "slashes" 9 [DieRoll.Create(1, 8, 6)]
+                                                ])
+                                       ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 8)), 1)
+                            ])
+// archer8b was generated using PHB standard array and variant human Fighter 5 with Archery Style and studded leather and longbow +1 and Sharpshooter feat
+let archer8b() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 68), AC=17, Prof = +3,
+                            Traits=[ActionSurge; AthleticsProficient; ImprovedCritical],
+                            Actions = [Action.Create("Shoot",
+                                            Attack [
+                                                Attack.BestOf(Attack.CreateMagic "shoots" 11 [DieRoll.Create(1, 8, 6)], Attack.CreateMagic "headshots" 6 [DieRoll.Create(1, 8, 16)])
+                                                Attack.BestOf(Attack.CreateMagic "shoots" 11 [DieRoll.Create(1, 8, 6)], Attack.CreateMagic "headshots" 6 [DieRoll.Create(1, 8, 16)])
+                                                ])
+                                        ],
+                            BonusActions = [
+                                Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 8)), 1)
+                            ])
 
 
 // rogue1 was generated using PHB standard array and variant human Rogue 1 with studded leather and light crossbow and Skulker feat (doesn't factor into this fight)
@@ -500,6 +538,42 @@ let swash() = Combatant("D'Artagnan the Swashbuckler", (12, 20, 14, 10, 14, 8, 1
                         Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 5)), 1)
                     ])
 
+let githyankiKnight() = Combatant(nameOf ["Gith";"Valjeezra";"Aliera";"Morrolan";"Sethrik"] "Knight of Gith", (16, 14, 15, 14, 14, 15, 91), AC=18,
+                            Actions = [
+                                Action.Create("Multiattack",
+                                    Attack [
+                                        Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 6, 6); DieRoll.Create(3, 6)]
+                                        Attack.CreateMagic "cuts" 9 [DieRoll.Create(2, 6, 6); DieRoll.Create(3, 6)]
+                                    ])
+                            ])
+let zerth() = Combatant(nameOf ["Zerthimon"; "Kolin"; "Praxis"; "Roneesi"; "Katrin"] "Zerth", (13, 18, 15, 16, 17, 12, 84), AC=17,
+                        Traits = [ShieldSpell], SP=6,
+                        Actions = [
+                            Action.Create("Multiattack",
+                                Attack [
+                                    Attack.CreateMagic "punches" 7 [DieRoll.Create(2, 6, 4); DieRoll.Create(3, 8)]
+                                    Attack.CreateMagic "kicks" 7 [DieRoll.Create(2, 6, 4); DieRoll.Create(3, 8)]
+                                ])
+                        ])
+
+let githyanki() = Combatant(nameOf ["Gith";"Valjeezra";"Aliera";"Morrolan";"Sethrik"] "githyanki", (15, 14, 12, 13, 13, 10, 49), AC=17,
+                            Actions = [
+                                Action.Create("Multiattack",
+                                    Attack [
+                                        Attack.CreateMagic "cuts" 4 [DieRoll.Create(2, 6, 2); DieRoll.Create(2, 6)]
+                                        Attack.CreateMagic "cuts" 4 [DieRoll.Create(2, 6, 2); DieRoll.Create(2, 6)]
+                                    ])
+                            ])
+let githzerai() = Combatant(nameOf ["Zerthimon"; "Kolin"; "Praxis"; "Roneesi"; "Katrin"] "githzerai", (12, 15, 12, 13, 14, 10, 38), AC=14,
+                        Traits = [ShieldSpell], SP=6,
+                        Actions = [
+                            Action.Create("Multiattack",
+                                Attack [
+                                    Attack.CreateMagic "punches" 4 [DieRoll.Create(1, 8, 2); DieRoll.Create(2, 8)]
+                                    Attack.CreateMagic "kicks" 4 [DieRoll.Create(1, 8, 2); DieRoll.Create(2, 8)]
+                                ])
+                        ])
+
 
 let fight side1 side2 =
     let all = List.append side1 side2
@@ -564,17 +638,8 @@ let evalGroup opponents friendlies =
     let averageSurviving = ((live |> List.map snd |> List.sum |> float) / float (List.length live))
     printfn "%s win %d out of %d matches against %s, with %.2f members still alive on average" friends (live |> List.length) NumberOfRuns foes averageSurviving
 
-//compare [banditCaptain] [ogre]
-compare [ogre] [banditCaptain]
-compare [champion1;champion1;archer1;archer1] [banditCaptain]
-compare [champion1;champion1;archer1;archer1] [weakenedBanditCaptain]
-compare [champion1;champion1;rogue1;rogue1] [banditCaptain]
-compare [champion1;champion1;rogue1;rogue1] [weakenedBanditCaptain]
-fight [ogre();ogre()] [champion1();champion1();archer1();archer1()]
-evalGroup [marilith] [champion1;champion1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;archer1;]
-evalGroup [marilith] [champion5;champion5;archer5;archer5]
-evalGroup [marilith] [champion5;champion5;champion5;champion5;archer5;archer5;archer5;archer5]
-evalGroup [marilith] [champion9;champion9;archer9;archer9]
-evalGroup [marilith] [champion9b;champion9b;archer9b;archer9b]
-evalGroup [marilith] [champion9b;champion9b;archer9b;archer9b;archer9b]
-evalGroup [marilith] [shooter;shooter;shooter;shooter]
+compare [zerth] [githyankiKnight]
+compare [githyanki] [githzerai]
+//compare [githyankiKnight] [zerth]
+//evalGroup [zerth;zerth;zerth] [githyankiKnight;githyankiKnight;githyankiKnight]
+evalGroup [githzerai;githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
