@@ -469,8 +469,8 @@ let archer9() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 76
                                 Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
                             ])
 
-// champion9b was generated using PHB standard array and variant human Fighter 5 with Dueling Style and plate armor + shield + longsword +1 and Heavy Armor Master feat
-let champion9b() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 8, 76), AC=18,
+// champion9b was generated using PHB standard array and variant human Fighter 9 with Dueling Style and plate armor + shield + longsword +1 and Heavy Armor Master + Tough feats
+let champion9b() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 8, 94), AC=18,
                             Traits=[HeavyArmorMaster; ActionSurge; AthleticsProficient; ImprovedCritical], Prof = +4,
                             Actions = [Action.Create("Melee attack",
                                             Attack [
@@ -481,8 +481,8 @@ let champion9b() = Combatant(nameOf humanNames "Champion", (20, 14, 14, 10, 11, 
                             BonusActions = [
                                 Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 9)), 1)
                             ])
-// archer9b was generated using PHB standard array and variant human Fighter 5 with Archery Style and studded leather and longbow +1 and Sharpshooter feat
-let archer9b() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 76), AC=17, Prof = +4,
+// archer9b was generated using PHB standard array and variant human Fighter 9 with Archery Style and studded leather and longbow +1 and Sharpshooter + Tough feats
+let archer9b() = Combatant(nameOf humanNames "Archer", (14, 20, 14, 10, 12, 8, 94), AC=17, Prof = +4,
                             Traits=[ActionSurge; AthleticsProficient; ImprovedCritical],
                             Actions = [Action.Create("Shoot",
                                             Attack [
@@ -722,9 +722,11 @@ let evalGroup opponents friendlies =
     let averageSurviving = ((live |> List.map snd |> List.sum |> float) / float (List.length live))
     printfn "%s win %d out of %d matches against %s, with %.2f members still alive on average" friends (live |> List.length) NumberOfRuns foes averageSurviving
 
-compare [githyankiKnight] [zerth]
-compare [githyanki] [githzerai]
+//compare [githyankiKnight] [zerth]
+//compare [githyanki] [githzerai]
 //compare [githyankiKnight] [zerth]
 //evalGroup [zerth;zerth;zerth] [githyankiKnight;githyankiKnight;githyankiKnight]
-evalGroup [githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
-fight [balor()] [pitFiend()]
+//evalGroup [githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
+//fight [balor()] [pitFiend()]
+compare [champion9b;champion9b;archer9b;archer9b;archer9b] [pitFiend]
+compare [champion9b;champion9b;archer9b;archer9b;archer9b] [balor]
