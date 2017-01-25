@@ -12,15 +12,20 @@ type DieRoll = { N: int; DieSize: int; Plus: int } with
     static member Create(n, d, x) = { N = n; DieSize = d; Plus = x }
     static member eval (rolls: DieRoll list) =
         rolls |> Seq.sumBy (fun roll -> d roll.N roll.DieSize roll.Plus)
-type DamageType = Weapon | MagicalWeapon | Poison | Fire
-type SaveAbility = Dex | Con
+type DamageType = Weapon | MagicalWeapon | Poison | Fire | Lightning | Cold
+type SaveAbility = Str | Dex | Con | Int | Wis | Cha
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
-type Effect = Afraid | Blinded | Damage of Damage | Constrict of DieRoll
-type DirectAttack = { Text: string; ToHit: int; Damage: DieRoll list; DamageType: DamageType; Rider: Effect option }
+type Effect = Restrained | Grappled | Prone | Afraid | Blinded | OngoingDamage of SaveAbility * int * Damage | Constrict of DieRoll
+    with
+    static member Exists x effects = effects |> List.contains x
+    static member Add x effects = if effects |> List.contains x |> not then x :: effects else effects
+    static member Remove x effects = effects |> List.filter ((<>) x)
+type DirectAttack = { Text: string; ToHit: int; Damage: (DieRoll list * DamageType) list; Rider: Effect option }
 type Attack = Direct of DirectAttack | Grapple | ShoveProne | BestOf of Attack * Attack with
-    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = Weapon; Rider = None }
-    static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon; Rider = None }
-    static member CreateMagicWithRider descriptor t d rider = Direct { Text = descriptor; ToHit = t; Damage = d; DamageType = MagicalWeapon; Rider = Some rider }
+    static member Create descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = [d, Weapon]; Rider = None }
+    static member CreateDualType descriptor t d1 d2 = Direct { Text = descriptor; ToHit = t; Damage = [d1;d2]; Rider = None }
+    static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = [d, MagicalWeapon]; Rider = None }
+    static member CreateMagicWithRider descriptor t d rider = Direct { Text = descriptor; ToHit = t; Damage = [d, MagicalWeapon]; Rider = Some rider }
 type AoETarget = All | EnemyOnly
 type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll | BreakFree
 type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option; } with
@@ -53,7 +58,7 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
-             | HeavyArmorMaster | Reactive | ShieldSpell
+             | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -62,16 +67,17 @@ module Combatants =
     type Combatant(name, stats) =
         let str, dex, con, int, wis, cha, maxHP = (stats : int * int * int * int * int * int * int)
         let mutable prof = +4 // for this sim, proficiency bonus is +4 for both Slaads and Fighters
-        let mutable isProne = false
-        let mutable isGrappled = false
-        let mutable isAfraid = false
         let mutable concentration = ref None
         let mutable hasReaction = true
         let mutable hasActionSurged = false
         let mutable hasAction = true
         let mutable hp = maxHP
         let mutable hasSneakAttacked = false
-        let mutable isRestrained = false
+        let mutable isFearInnoculated = false // once fear is conquered, it's conquered for that whole combat
+        let mutable ongoingEffects = []
+        let addEffect x = ongoingEffects <- ongoingEffects |> Effect.Add x
+        let removeEffect x = ongoingEffects <- ongoingEffects |> Effect.Remove x
+        let hasEffect x = ongoingEffects |> Effect.Exists x
         let restoreHP n =
             hp <- min maxHP (hp + n)
         let hasTrait (this: Combatant) = flip List.contains this.Traits
@@ -91,31 +97,39 @@ module Combatants =
         member val BonusActions = [] with get, set
         member val Traits = [] with get, set
         member val Resists : DamageType list = [] with get, set
-        member this.IsRestrained = isRestrained
+        member val Immunities : DamageType list = [] with get, set
+        member val SaveProficiencies : SaveAbility list = [] with get, set
+        member this.IsRestrained = hasEffect Restrained
         member private this.TakeDamage n dtype rider =
-            let n = if (dtype = Weapon || dtype = MagicalWeapon) && hasTrait this UncannyDodge && this.TryReact() then
-                        printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
-                        n / 2
-                    else n
-            let n = if dtype = Weapon && hasTrait this HeavyArmorMaster then
-                        printfn "Heavy Armor Master! Damaged reduced from %d to %d" n (n-3)
-                        n - 3
-                    else
-                        n
-            if this.Resists |> List.contains dtype then
-                printfn "%s takes %d points of damage! (Halved from %d for %A resistance)" this.Name (n/2) n dtype
-                hp <- hp - n/2
+            if this.Immunities |> List.contains dtype then
+                printfn "%s is immune to all %d points of %A damage" this.Name n (dtype)
             else
-                printfn "%s takes %d points of damage!" this.Name n
-                hp <- hp - n
-            match rider with
-            | Some(Constrict(_)) ->
-                printfn "%s is restrained!" this.Name
-                isRestrained <- true
-            | None -> ()
-            | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
-        member private this.IsProne = isProne
-        member private this.IsGrappled = isGrappled
+                let n = if (dtype = Weapon || dtype = MagicalWeapon) && hasTrait this UncannyDodge && this.TryReact() then
+                            printfn "Uncanny Dodge! Damaged halved from %d to %d" n (n/2)
+                            n / 2
+                        else n
+                let n = if dtype = Weapon && hasTrait this HeavyArmorMaster then
+                            printfn "Heavy Armor Master! Damaged reduced from %d to %d" n (n-3)
+                            n - 3
+                        else
+                            n
+                if this.Resists |> List.contains dtype then
+                    printfn "%s takes %d points of %A damage! (Halved from %d for %A resistance)" this.Name (n/2) dtype n dtype
+                    hp <- hp - n/2
+                else
+                    printfn "%s takes %d points of %A damage!" this.Name n dtype
+                    hp <- hp - n
+                match rider with
+                | Some(Constrict(_)) ->
+                    printfn "%s is restrained!" this.Name
+                    addEffect Restrained
+                | Some(OngoingDamage(ability, dc, dmg) as ongoing) ->
+                    if ongoingEffects |> List.contains(ongoing) |> not then
+                        addEffect ongoing
+                | None -> ()
+                | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
+        member private this.IsProne = hasEffect Prone
+        member private this.IsGrappled = hasEffect Grappled
         member private this.IsBlinded = AreaIsObscured && not this.Blindsight
         member this.HP = hp
         member val SP = 0 with get, set
@@ -148,25 +162,64 @@ module Combatants =
             let bonus = max (acrobatics this) (athletics this)
             if d20 Regular + bonus < offensiveRoll then
                 printfn "%s is grappled!" this.Name
-                isGrappled <- true
+                addEffect Grappled
             else
                 printfn "%s avoids grapple." this.Name
         member private this.TryShoveProne offensiveRoll =
             let bonus = max (acrobatics this) (athletics this)
             if d20 Regular + bonus < offensiveRoll then
                 printfn "%s is shoved prone!" this.Name
-                isProne <- true
+                addEffect Prone
             else
                 printfn "%s avoids shove." this.Name
+        member private this.SaveBonus ability =
+            let p = if (this.SaveProficiencies |> List.contains ability) then this.Prof else 0
+            p + (match ability with
+                | Str -> str
+                | Dex -> dex
+                | Con -> con
+                | Int -> int
+                | Wis -> wis
+                | Cha -> cha
+                |> statBonus)
         member this.Status =
-            let statusEffects = if isRestrained then "(restrained)" elif isGrappled && isProne then "(grappled, prone)" elif isGrappled then "(grappled)" elif isProne then "(prone)" else null
+            let statusEffects = if ongoingEffects.IsEmpty then null else sprintf "(%s)" (System.String.Join(", ", ongoingEffects |> sprintf "%A"))
             if statusEffects <> null then
                 sprintf "%s: %d HP (%d damage taken) %s" this.Name hp (maxHP - hp) statusEffects
             else
                 sprintf "%s: %d HP (%d damage taken)" this.Name hp (maxHP - hp)
         member this.TakeTurn (target: Combatant) =
+            let isProne = ongoingEffects |> Effect.Exists Prone
+            let isGrappled = ongoingEffects |> Effect.Exists Grappled
             if isProne && not isGrappled then
-                isProne <- false // stand back up
+                ongoingEffects <- ongoingEffects |> Effect.Remove Prone // stand back up
+            match target.Traits |> List.tryFind (function (FearAura(x)) -> true | _ -> false) with
+            | Some(FearAura(x)) when not isFearInnoculated ->
+                // See if we are afraid/continue to be afraid
+                if (d20 Regular + (this.SaveBonus Wis) >= x) then // note: MagicResistant does not apply to fear auras
+                    if hasEffect Afraid then
+                        removeEffect Afraid
+                        printfn "%s recovers from fear of %s" this.Name target.Name
+                    else
+                        printfn "%s is unfazed by fearsome %s" this.Name target.Name
+                    isFearInnoculated <- true
+                else
+                    addEffect Afraid
+            | _ -> ()
+            // apply any start-of-turn damaging effects
+            for effect in ongoingEffects do
+                match effect with
+                | OngoingDamage(ability, dc, dmg) ->
+                    if (d20 Regular + (this.SaveBonus ability) >= dc) then
+                        removeEffect effect
+                        printfn "%s resists effect: %A ends" this.Name effect
+                    else
+                        match dmg with
+                        | Unavoidable(dmg, dtype) ->
+                            let dmg = DieRoll.eval [dmg]
+                            this.TakeDamage dmg dtype None
+                        | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
+                | _ -> ()
             let canUse = (fun (a:Action) ->
                 match a.Effect with
                 | Healing(_) when float this.HP > float maxHP * 0.8 -> false // use healing when at less than 80% of health
@@ -180,7 +233,7 @@ module Combatants =
                     a.UsesRemaining <- Some(a.UsesRemaining.Value - 1)
                 let attackerStatus =
                     let hasAdvantage = target.IsProne || target.IsBlinded || target.IsRestrained
-                    let hasDisadvantage = isProne|| isRestrained || this.IsBlinded || isAfraid
+                    let hasDisadvantage = ongoingEffects |> List.exists (function | Prone | Restrained | Blinded | Afraid -> true | _ -> false)
                     match hasAdvantage, hasDisadvantage with
                     | true, false -> Advantage
                     | false, true -> Disadvantage
@@ -191,7 +244,8 @@ module Combatants =
                         match a.Rider with
                         | Some (Constrict(dmg)) when target.IsRestrained ->
                             printf "Autohit! %s squeezes %s" this.Name target.Name
-                            target.TakeDamage (DieRoll.eval a.Damage) a.DamageType a.Rider
+                            for (dmg, dtype) in a.Damage do
+                                target.TakeDamage (DieRoll.eval dmg) dtype a.Rider
                         | _ ->
                             let attackRoll = d20 attackerStatus
                             printfn "Roll: %d" attackRoll
@@ -207,18 +261,20 @@ module Combatants =
                                         sneak :: dmg
                                     | _ -> dmg
                             if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
-                                let dmg = DieRoll.eval (List.append a.Damage (critBonus a.Damage) |> addSneak)
                                 printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
-                                target.TakeDamage dmg a.DamageType a.Rider
+                                for (dmg, dtype) in a.Damage do
+                                    let dmg = DieRoll.eval (List.append dmg (critBonus dmg) |> addSneak)
+                                    target.TakeDamage dmg dtype a.Rider
                             elif attackRoll + a.ToHit >= target.AC then
                                 if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
                                     printfn "%s misses %s (parried)" this.Name target.Name
                                 elif attackRoll + a.ToHit < (target.AC + 5) && hasTrait target ShieldSpell && target.TryShield() then
                                     printfn "%s misses %s (Shield)" this.Name target.Name
                                 else
-                                    let dmg = DieRoll.eval (a.Damage |> addSneak)
                                     printf "Hit! %s %s %s: " this.Name a.Text target.Name
-                                    target.TakeDamage dmg a.DamageType a.Rider
+                                    for (dmg, dtype) in a.Damage do
+                                        let dmg = DieRoll.eval (dmg |> addSneak)
+                                        target.TakeDamage dmg dtype a.Rider
                             else
                                 printfn "%s misses %s" this.Name target.Name
                     | BestOf(a1, a2) ->
@@ -238,7 +294,7 @@ module Combatants =
                                         let hitRate = match adv with | Advantage -> (1. - (1. - hitRate) * (1. - hitRate)) | Disadvantage -> hitRate * hitRate | _ -> hitRate
                                         let critRate = match adv with | Advantage -> (1. - 0.95 * 0.95) | Disadvantage -> 0.05 * 0.05 | _ -> 0.05
                                         let avg = Seq.sumBy (fun (roll : DieRoll) -> float roll.Plus + (float roll.N * float (roll.DieSize + 1) / 2.0))
-                                        let dmg = hitRate * avg att.Damage + critRate * avg (critBonus att.Damage)
+                                        let dmg = hitRate * (att.Damage |> Seq.sumBy (fst >> avg)) + critRate * (att.Damage |> Seq.sumBy (fst >> critBonus >> avg))
                                         dmg
                                     | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
                                 let evalDmg = evalDmg target.AC attackerStatus
@@ -266,9 +322,9 @@ module Combatants =
                     let him = d20 Regular + target.Athletics
                     if me > him then
                         printfn "%s breaks free! (%d beats %d)" this.Name me him
-                        isGrappled <- false
-                        isProne <- false
-                        isRestrained <- false
+                        removeEffect Grappled
+                        removeEffect Restrained
+                        removeEffect Prone
                     else
                         printfn "%s cannot break free! (%d does not beat %d)" this.Name me him
             if hasAction then
@@ -574,6 +630,30 @@ let githzerai() = Combatant(nameOf ["Zerthimon"; "Kolin"; "Praxis"; "Roneesi"; "
                                 ])
                         ])
 
+let balor() = Combatant(nameOf ["Kolor"; "Koloss"; "Zentradi"; "Abnaxis"; "Gargamontor"] "Balor", (26, 15, 22, 20, 16, 22, 262), Prof = +6, SaveProficiencies=[Str;Wis;Con;Cha],
+                        AC = 19, Resists = [Lightning; Cold; Weapon], Immunities = [Fire; Poison],
+                        Traits = [MagicResistant],
+                        Actions = [
+                            Action.Create("Multiattack",
+                                Attack [
+                                    Attack.CreateDualType "slashes" 14 ([DieRoll.Create(3,8,8)], MagicalWeapon) ([DieRoll.Create(3,8)], Lightning)
+                                    Attack.CreateDualType "whips" 14 ([DieRoll.Create(2,6,8)], MagicalWeapon) ([DieRoll.Create(3,6)], Fire)
+                                ])
+                        ])
+
+let pitFiend() = Combatant(nameOf ["Abariel";"Benetor";"Benedict";"Imariel";"Abbadon";"Lucifer"] "Pit Fiend", (26, 14, 24, 22, 18, 24, 300), Prof = +6, SaveProficiencies=[Dex;Con;Wis],
+                        AC = 19, Resists = [Cold; Weapon], Immunities = [Fire; Poison],
+                        Traits = [MagicResistant;FearAura(21)],
+                        Actions = [
+                            Action.Create("Multiattack",
+                                Attack [
+                                    Attack.CreateMagicWithRider "bites" 14 [DieRoll.Create(4, 6, 8)] (OngoingDamage(Con, 21, Unavoidable(DieRoll.Create(6, 6), Poison)))
+                                    Attack.CreateMagic "claws" 14 [DieRoll.Create(2, 8, 8)]
+                                    Attack.CreateDualType "smashes" 14 ([DieRoll.Create(2, 8, 8)], MagicalWeapon) ([DieRoll.Create(6,6)], Fire)
+                                    Attack.CreateMagic "smacks" 14 [DieRoll.Create(3, 10, 8)]
+                                ])
+                        ])
+
 
 let fight side1 side2 =
     let all = List.append side1 side2
@@ -590,15 +670,19 @@ let fight side1 side2 =
     let findOpponent c =
         let opponents = if List.exists ((=)c) side1 then side2 else side1
         opponents |> List.tryFind(fun (c: Combatant) -> c.IsAlive)
+    let mutable round = 1
     while hasLive side1 && hasLive side2 do
+        printfn "Round #%d:" round
         for c in combatantsInOrder do
             if c.IsAlive then
                 match findOpponent c with
                 | Some(opponent) -> c.TakeTurn opponent
                 | None -> ()
             all |> List.iter (fun c -> c.newTurn())
+        printfn "Status after round #%d:" round
         all |> List.iter printStatus
         all |> List.iter (fun c -> c.newRound())
+        round <- round + 1
 
 let compare opponents friendlyAlternatives =
     let NumberOfRuns = 100
@@ -638,8 +722,9 @@ let evalGroup opponents friendlies =
     let averageSurviving = ((live |> List.map snd |> List.sum |> float) / float (List.length live))
     printfn "%s win %d out of %d matches against %s, with %.2f members still alive on average" friends (live |> List.length) NumberOfRuns foes averageSurviving
 
-compare [zerth] [githyankiKnight]
+compare [githyankiKnight] [zerth]
 compare [githyanki] [githzerai]
 //compare [githyankiKnight] [zerth]
 //evalGroup [zerth;zerth;zerth] [githyankiKnight;githyankiKnight;githyankiKnight]
-evalGroup [githzerai;githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
+evalGroup [githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
+fight [balor()] [pitFiend()]
