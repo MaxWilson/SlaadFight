@@ -58,7 +58,7 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
-             | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant
+             | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant | LuckyDefender | LuckyAttacker | GreatWeaponMaster
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -84,6 +84,8 @@ module Combatants =
         let acrobatics (this: Combatant) = statBonus dex + (if hasTrait this RemarkableAthlete then prof /2 else 0)
         let athletics (this: Combatant) = statBonus str + (if hasTrait this AthleticsExpertise then prof * 2 elif hasTrait this AthleticsProficient then prof elif hasTrait this RemarkableAthlete then prof /2 else 0)
         let mutable isShielding = false
+        let mutable luckUsed =  0
+        let mutable hasBonusAction = true
         member this.Prof with get() = prof and set v = prof <- v
         member this.Athletics = athletics this
         member this.InitBonus =
@@ -136,6 +138,7 @@ module Combatants =
         member this.newRound() =
             hasReaction <- true
             hasAction <- true
+            hasBonusAction <- true
             hasSneakAttacked <- false
             isShielding <- false
             if this.Regen > 0 then
@@ -152,6 +155,12 @@ module Combatants =
             elif hasTrait this ShieldSpell && this.SP >= 2 && this.TryReact() then
                 this.SP <- this.SP - 1
                 isShielding <- true
+                true
+            else
+                false
+        member this.TryLuck() =
+            if luckUsed < 3 then
+                luckUsed <- luckUsed + 1
                 true
             else
                 false
@@ -233,7 +242,7 @@ module Combatants =
                     a.UsesRemaining <- Some(a.UsesRemaining.Value - 1)
                 let attackerStatus =
                     let hasAdvantage = target.IsProne || target.IsBlinded || target.IsRestrained
-                    let hasDisadvantage = ongoingEffects |> List.exists (function | Prone | Restrained | Blinded | Afraid -> true | _ -> false)
+                    let hasDisadvantage = ongoingEffects |> List.exists (function | Prone | Restrained | Blinded | Afraid -> true | _ -> false) || this.IsBlinded
                     match hasAdvantage, hasDisadvantage with
                     | true, false -> Advantage
                     | false, true -> Disadvantage
@@ -249,6 +258,20 @@ module Combatants =
                         | _ ->
                             let attackRoll = d20 attackerStatus
                             printfn "Roll: %d" attackRoll
+                            let attackRoll = if (attackRoll = 1 || attackRoll + a.ToHit < target.AC) && hasTrait this LuckyAttacker && this.TryLuck()
+                                             then
+                                                let reroll = d20 attackerStatus
+                                                printfn "%s gets lucky! Re-roll: %d" this.Name reroll
+                                                max attackRoll reroll
+                                             else
+                                                attackRoll
+                            let attackRoll = if (attackRoll = 20 || attackRoll + a.ToHit >= target.AC) && hasTrait target LuckyDefender && target.TryLuck()
+                                             then
+                                                let reroll = d20 attackerStatus
+                                                printfn "%s gets lucky! Re-roll: %d" target.Name reroll
+                                                min attackRoll reroll
+                                             else
+                                                attackRoll
                             // add sneak attack damage once per round if SneakAttack trait exists
                             let addSneak dmg =
                                 if hasSneakAttacked then
@@ -265,6 +288,10 @@ module Combatants =
                                 for (dmg, dtype) in a.Damage do
                                     let dmg = DieRoll.eval (List.append dmg (critBonus dmg) |> addSneak)
                                     target.TakeDamage dmg dtype a.Rider
+                                if hasTrait this GreatWeaponMaster && hasBonusAction then
+                                    hasBonusAction <- false
+                                    printfn "Great Weapon Master %s gets a bonus attack!" this.Name
+                                    executeAttack (Direct a) // make another attack with bonus action
                             elif attackRoll + a.ToHit >= target.AC then
                                 if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
                                     printfn "%s misses %s (parried)" this.Name target.Name
@@ -335,9 +362,10 @@ module Combatants =
                     printfn "ACTION SURGE!!"
                     execute action
                     hasActionSurged <- true
-                match this.BonusActions |> Seq.tryFind canUse with
-                | Some(bonus) -> execute bonus
-                | _ -> ()
+                if hasBonusAction then
+                    match this.BonusActions |> Seq.tryFind canUse with
+                    | Some(bonus) -> execute bonus
+                    | _ -> ()
 
     let rollInit (c: Combatant) =
             d 1 20 c.InitBonus
@@ -631,7 +659,18 @@ let githzerai() = Combatant(nameOf ["Zerthimon"; "Kolin"; "Praxis"; "Roneesi"; "
                         ])
 
 let balor() = Combatant(nameOf ["Kolor"; "Koloss"; "Zentradi"; "Abnaxis"; "Gargamontor"] "Balor", (26, 15, 22, 20, 16, 22, 262), Prof = +6, SaveProficiencies=[Str;Wis;Con;Cha],
-                        AC = 19, Resists = [Lightning; Cold; Weapon], Immunities = [Fire; Poison],
+                        AC = 19, Resists = [Lightning; Cold; Weapon], Immunities = [Fire; Poison], Blindsight = true,
+                        Traits = [MagicResistant],
+                        Actions = [
+                            Action.Create("Multiattack",
+                                Attack [
+                                    Attack.CreateDualType "slashes" 14 ([DieRoll.Create(3,8,8)], MagicalWeapon) ([DieRoll.Create(3,8)], Lightning)
+                                    Attack.CreateDualType "whips" 14 ([DieRoll.Create(2,6,8)], MagicalWeapon) ([DieRoll.Create(3,6)], Fire)
+                                ])
+                        ])
+
+let balorCeltavian() = Combatant(nameOf ["Kolor"; "Koloss"; "Zentradi"; "Abnaxis"; "Gargamontor"] "Balor", (26, 15, 22, 20, 16, 22, 393), Prof = +6, SaveProficiencies=[Str;Wis;Con;Cha],
+                        AC = 19, Resists = [Lightning; Cold; Weapon], Immunities = [Fire; Poison], Blindsight = true,
                         Traits = [MagicResistant],
                         Actions = [
                             Action.Create("Multiattack",
@@ -642,7 +681,7 @@ let balor() = Combatant(nameOf ["Kolor"; "Koloss"; "Zentradi"; "Abnaxis"; "Garga
                         ])
 
 let pitFiend() = Combatant(nameOf ["Abariel";"Benetor";"Benedict";"Imariel";"Abbadon";"Lucifer"] "Pit Fiend", (26, 14, 24, 22, 18, 24, 300), Prof = +6, SaveProficiencies=[Dex;Con;Wis],
-                        AC = 19, Resists = [Cold; Weapon], Immunities = [Fire; Poison],
+                        AC = 19, Resists = [Cold; Weapon], Immunities = [Fire; Poison], Blindsight = true,
                         Traits = [MagicResistant;FearAura(21)],
                         Actions = [
                             Action.Create("Multiattack",
@@ -652,6 +691,59 @@ let pitFiend() = Combatant(nameOf ["Abariel";"Benetor";"Benedict";"Imariel";"Abb
                                     Attack.CreateDualType "smashes" 14 ([DieRoll.Create(2, 8, 8)], MagicalWeapon) ([DieRoll.Create(6,6)], Fire)
                                     Attack.CreateMagic "smacks" 14 [DieRoll.Create(3, 10, 8)]
                                 ])
+                        ])
+
+let orc() = Combatant(nameOf giantNames "orc", (16, 12, 16, 7, 11, 10, 15), Prof = +2, AC = 13,
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 12, 3)]])
+                        ])
+
+let heavyArmor1() = Combatant(nameOf humanNames "Valerian", (16, 12, 16, 11, 12, 10, 13), Prof = +2, AC = 19,
+                        Traits=[HeavyArmorMaster],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ],
+                        BonusActions = [
+                            Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                        ])
+let gwm1() = Combatant(nameOf humanNames "Cimmerian", (16, 12, 16, 11, 12, 10, 13), Prof = +2, AC = 17,
+                        Traits=[GreatWeaponMaster],
+                        Actions = [
+                            Action.Create("Attack", Attack [BestOf(Attack.Create "slices" 5 [DieRoll.Create(1, 8, 3)], Attack.Create "slices" 0 [DieRoll.Create(1, 8, 13)])])
+                        ],
+                        BonusActions = [
+                            Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                        ])
+let crossbowExpert1() = Combatant(nameOf humanNames "crossbow expert", (12, 16, 16, 11, 12, 10, 13), Prof = +2, AC = 16,
+                            Actions = [
+                                Action.Create("Attack", Attack [Attack.Create "shoots" 7 [DieRoll.Create(1, 10, 3)]])
+                            ],
+                            BonusActions = [
+                                Action.Create("Attack", Attack [Attack.Create "shoots" 7 [DieRoll.Create(1, 6, 3)]])
+                            ])
+let lucky1() = Combatant(nameOf humanNames "Fortunate", (16, 12, 16, 11, 12, 10, 13), Prof = +2, AC = 19,
+                        Traits=[LuckyDefender],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ],
+                        BonusActions = [
+                            Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                        ])
+let lucky1b() = Combatant(nameOf humanNames "Fortunate", (16, 12, 16, 11, 12, 10, 13), Prof = +2, AC = 19,
+                        Traits=[LuckyDefender;LuckyAttacker],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ],
+                        BonusActions = [
+                            Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
+                        ])
+let swash1() = Combatant(nameOf humanNames "Agile", (16, 12, 16, 11, 12, 10, 13), Prof = +2, AC = 19,
+                        Traits=[DefensiveDuelist],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ],
+                        BonusActions = [
+                            Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
                         ])
 
 
@@ -728,5 +820,8 @@ let evalGroup opponents friendlies =
 //evalGroup [zerth;zerth;zerth] [githyankiKnight;githyankiKnight;githyankiKnight]
 //evalGroup [githzerai;githzerai;zerth] [githyanki;githyanki;githyankiKnight]
 //fight [balor()] [pitFiend()]
-compare [champion9b;champion9b;archer9b;archer9b;archer9b] [pitFiend]
-compare [champion9b;champion9b;archer9b;archer9b;archer9b] [balor]
+//compare [champion9b;champion9b;archer9b;archer9b;archer9b] [pitFiend]
+//compare [champion9b;champion9b;archer9b;archer9b;archer9b] [balor]
+
+fight [lucky1()] [orc()]
+compare [orc] [heavyArmor1;lucky1;lucky1b;swash1;gwm1;crossbowExpert1]
