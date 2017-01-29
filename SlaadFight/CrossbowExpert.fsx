@@ -58,7 +58,8 @@ let formatDice (dice: DieRoll list) =
     loop Map.empty 0 dice
 
 type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
-             | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant | LuckyDefender | LuckyAttacker | GreatWeaponMaster
+             | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant | LuckyDefender | LuckyAttacker | LuckyInit | GreatWeaponMaster | Rage of int | DoubleCrits | RelentlessEndurance
+             | PolearmMaster of Attack
 
 let mutable AreaIsObscured = false
 module Combatants =
@@ -86,6 +87,9 @@ module Combatants =
         let mutable isShielding = false
         let mutable luckUsed =  0
         let mutable hasBonusAction = true
+        let mutable rage = 0
+        let mutable usedRelentless = false
+        let mutable engagedWith = []
         member this.Prof with get() = prof and set v = prof <- v
         member this.Athletics = athletics this
         member this.InitBonus =
@@ -115,12 +119,16 @@ module Combatants =
                             n - 3
                         else
                             n
-                if this.Resists |> List.contains dtype then
+                if this.Resists |> List.contains dtype || (rage > 0 && dtype = Weapon) then
                     printfn "%s takes %d points of %A damage! (Halved from %d for %A resistance)" this.Name (n/2) dtype n dtype
                     hp <- hp - n/2
                 else
                     printfn "%s takes %d points of %A damage!" this.Name n dtype
                     hp <- hp - n
+                if hp <= 0 && (abs hp) < maxHP && hasTrait this RelentlessEndurance && not usedRelentless then
+                    printfn "%s remains at 1 HP instead of %d (Relentless Endurance)" this.Name hp
+                    hp <- 1
+                    usedRelentless <- true
                 match rider with
                 | Some(Constrict(_)) ->
                     printfn "%s is restrained!" this.Name
@@ -197,6 +205,112 @@ module Combatants =
                 sprintf "%s: %d HP (%d damage taken) %s" this.Name hp (maxHP - hp) statusEffects
             else
                 sprintf "%s: %d HP (%d damage taken)" this.Name hp (maxHP - hp)
+        member this.Attack (a, target: Combatant) =
+                let attackerStatus =
+                    let hasAdvantage = target.IsProne || target.IsBlinded || target.IsRestrained
+                    let hasDisadvantage = ongoingEffects |> List.exists (function | Prone | Restrained | Blinded | Afraid -> true | _ -> false) || this.IsBlinded
+                    match hasAdvantage, hasDisadvantage with
+                    | true, false -> Advantage
+                    | false, true -> Disadvantage
+                    | _ -> Regular
+                // allow opportunity attacks by polearm master on first attack
+                if not (List.contains target engagedWith) then
+                    engagedWith <- target :: engagedWith
+                    match target.Traits |> List.tryPick (function PolearmMaster(attack) -> Some attack | _ -> None) with
+                    | Some(attack) ->
+                        printfn "%s interrupts %s's attack with polearm attack!" target.Name this.Name
+                        target.Attack(attack, this)
+                    | _ -> ()
+                match a with
+                | Direct(a) ->
+                    match a.Rider with
+                    | Some (Constrict(dmg)) when target.IsRestrained ->
+                        printf "Autohit! %s squeezes %s" this.Name target.Name
+                        for (dmg, dtype) in a.Damage do
+                            target.TakeDamage (DieRoll.eval dmg) dtype a.Rider
+                    | _ ->
+                        let attackRoll = d20 attackerStatus
+                        printfn "Roll: %d" attackRoll
+                        let attackRoll = if (attackRoll = 1 || attackRoll + a.ToHit < target.AC) && hasTrait this LuckyAttacker && this.TryLuck()
+                                            then
+                                            let reroll = d20 attackerStatus
+                                            printfn "%s gets lucky! Re-roll: %d" this.Name reroll
+                                            max attackRoll reroll
+                                            else
+                                            attackRoll
+                        let attackRoll = if (attackRoll = 20 || attackRoll + a.ToHit >= target.AC) && hasTrait target LuckyDefender && target.TryLuck()
+                                            then
+                                            let reroll = d20 attackerStatus
+                                            printfn "%s gets lucky! Re-roll: %d" target.Name reroll
+                                            min attackRoll reroll
+                                            else
+                                            attackRoll
+                        // add sneak attack damage once per round if SneakAttack trait exists
+                        let addSneak dmg =
+                            if hasSneakAttacked then
+                                dmg
+                            else
+                                match this.Traits |> List.tryFind (function SneakAttack(_) -> true | _ -> false) with
+                                | Some(SneakAttack(sneak)) ->
+                                    printfn "SNEAK ATTACK!"
+                                    hasSneakAttacked <- true
+                                    sneak :: dmg
+                                | _ -> dmg
+                        if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
+                            printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
+                            for (dmg, dtype) in a.Damage do
+                                let critDice = if hasTrait this DoubleCrits then List.append (critBonus dmg |> addSneak) (critBonus dmg) else (critBonus dmg |> addSneak)
+                                let dmg = DieRoll.eval (List.append dmg critDice) + rage
+                                target.TakeDamage dmg dtype a.Rider
+                            if hasTrait this GreatWeaponMaster && hasBonusAction then
+                                hasBonusAction <- false
+                                printfn "Great Weapon Master %s gets a bonus attack!" this.Name
+                                this.Attack((Direct a), target) // make another attack with bonus action
+                        elif attackRoll + a.ToHit >= target.AC then
+                            if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
+                                printfn "%s misses %s (parried)" this.Name target.Name
+                            elif attackRoll + a.ToHit < (target.AC + 5) && hasTrait target ShieldSpell && target.TryShield() then
+                                printfn "%s misses %s (Shield)" this.Name target.Name
+                            else
+                                printf "Hit! %s %s %s: " this.Name a.Text target.Name
+                                for (dmg, dtype) in a.Damage do
+                                    let dmg = DieRoll.eval (dmg |> addSneak) + rage
+                                    target.TakeDamage dmg dtype a.Rider
+                        else
+                            printfn "%s misses %s" this.Name target.Name
+                | BestOf(a1, a2) ->
+                    // we invent an ad hoc priority scheme for which attacks are "better": grappling is better against a non-grappled target; then pushing a non-prone target; then whatever attack has the highest expected damage
+                    let rec bestOf a1 a2 =
+                        // recur is for recursively evaluating args
+                        let recur = function | BestOf(lhs, rhs) -> bestOf lhs rhs | x -> x
+                        match recur a1, recur a2 with
+                        // BestOf cannot happen here because recur has already been called
+                        | Grapple, _ | _, Grapple when not target.IsGrappled -> Grapple
+                        | ShoveProne, _ | _, ShoveProne when not target.IsProne -> ShoveProne
+                        | Direct(_) as lhs, (Direct(_) as rhs) ->
+                            let evalDmg targetAC adv att =
+                                match att with
+                                | Direct(att) ->
+                                    let hitRate = float (min 19 (max 1 (21 + att.ToHit - targetAC))) / 20.
+                                    let hitRate = match adv with | Advantage -> (1. - (1. - hitRate) * (1. - hitRate)) | Disadvantage -> hitRate * hitRate | _ -> hitRate
+                                    let critRate = match adv with | Advantage -> (1. - 0.95 * 0.95) | Disadvantage -> 0.05 * 0.05 | _ -> 0.05
+                                    let avg = Seq.sumBy (fun (roll : DieRoll) -> float roll.Plus + (float roll.N * float (roll.DieSize + 1) / 2.0))
+                                    let dmg = hitRate * (att.Damage |> Seq.sumBy (fst >> avg)) + critRate * (att.Damage |> Seq.sumBy (fst >> critBonus >> avg))
+                                    dmg
+                                | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
+                            let evalDmg = evalDmg target.AC attackerStatus
+                            if evalDmg(lhs) < evalDmg(rhs) then
+                                rhs
+                            else
+                                lhs
+                        | Direct(_) as att, _ | _, (Direct(_) as att) -> att
+                        | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
+                    let best = bestOf a1 a2
+                    this.Attack(best, target)
+                | Grapple ->
+                    target.TryGrapple (d20 Regular + athletics this)
+                | ShoveProne ->
+                    target.TryShoveProne (d20 Regular + athletics this)
         member this.TakeTurn (target: Combatant) =
             let isProne = ongoingEffects |> Effect.Exists Prone
             let isGrappled = ongoingEffects |> Effect.Exists Grappled
@@ -240,107 +354,18 @@ module Combatants =
                 printfn "%s does %s" this.Name a.Name
                 if a.UsesRemaining.IsSome then
                     a.UsesRemaining <- Some(a.UsesRemaining.Value - 1)
-                let attackerStatus =
-                    let hasAdvantage = target.IsProne || target.IsBlinded || target.IsRestrained
-                    let hasDisadvantage = ongoingEffects |> List.exists (function | Prone | Restrained | Blinded | Afraid -> true | _ -> false) || this.IsBlinded
-                    match hasAdvantage, hasDisadvantage with
-                    | true, false -> Advantage
-                    | false, true -> Disadvantage
-                    | _ -> Regular
-                let rec executeAttack a =
-                    match a with
-                    | Direct(a) ->
-                        match a.Rider with
-                        | Some (Constrict(dmg)) when target.IsRestrained ->
-                            printf "Autohit! %s squeezes %s" this.Name target.Name
-                            for (dmg, dtype) in a.Damage do
-                                target.TakeDamage (DieRoll.eval dmg) dtype a.Rider
-                        | _ ->
-                            let attackRoll = d20 attackerStatus
-                            printfn "Roll: %d" attackRoll
-                            let attackRoll = if (attackRoll = 1 || attackRoll + a.ToHit < target.AC) && hasTrait this LuckyAttacker && this.TryLuck()
-                                             then
-                                                let reroll = d20 attackerStatus
-                                                printfn "%s gets lucky! Re-roll: %d" this.Name reroll
-                                                max attackRoll reroll
-                                             else
-                                                attackRoll
-                            let attackRoll = if (attackRoll = 20 || attackRoll + a.ToHit >= target.AC) && hasTrait target LuckyDefender && target.TryLuck()
-                                             then
-                                                let reroll = d20 attackerStatus
-                                                printfn "%s gets lucky! Re-roll: %d" target.Name reroll
-                                                min attackRoll reroll
-                                             else
-                                                attackRoll
-                            // add sneak attack damage once per round if SneakAttack trait exists
-                            let addSneak dmg =
-                                if hasSneakAttacked then
-                                    dmg
-                                else
-                                    match this.Traits |> List.tryFind (function SneakAttack(_) -> true | _ -> false) with
-                                    | Some(SneakAttack(sneak)) ->
-                                        printfn "SNEAK ATTACK!"
-                                        hasSneakAttacked <- true
-                                        sneak :: dmg
-                                    | _ -> dmg
-                            if attackRoll = 20 || (attackRoll >= 19 && hasTrait this ImprovedCritical) then
-                                printf "CRITICAL HIT! %s %s %s: " this.Name a.Text target.Name
-                                for (dmg, dtype) in a.Damage do
-                                    let dmg = DieRoll.eval (List.append dmg (critBonus dmg) |> addSneak)
-                                    target.TakeDamage dmg dtype a.Rider
-                                if hasTrait this GreatWeaponMaster && hasBonusAction then
-                                    hasBonusAction <- false
-                                    printfn "Great Weapon Master %s gets a bonus attack!" this.Name
-                                    executeAttack (Direct a) // make another attack with bonus action
-                            elif attackRoll + a.ToHit >= target.AC then
-                                if attackRoll + a.ToHit < (target.AC + target.Prof) && hasTrait target DefensiveDuelist && target.TryReact() then
-                                    printfn "%s misses %s (parried)" this.Name target.Name
-                                elif attackRoll + a.ToHit < (target.AC + 5) && hasTrait target ShieldSpell && target.TryShield() then
-                                    printfn "%s misses %s (Shield)" this.Name target.Name
-                                else
-                                    printf "Hit! %s %s %s: " this.Name a.Text target.Name
-                                    for (dmg, dtype) in a.Damage do
-                                        let dmg = DieRoll.eval (dmg |> addSneak)
-                                        target.TakeDamage dmg dtype a.Rider
-                            else
-                                printfn "%s misses %s" this.Name target.Name
-                    | BestOf(a1, a2) ->
-                        // we invent an ad hoc priority scheme for which attacks are "better": grappling is better against a non-grappled target; then pushing a non-prone target; then whatever attack has the highest expected damage
-                        let rec bestOf a1 a2 =
-                            // recur is for recursively evaluating args
-                            let recur = function | BestOf(lhs, rhs) -> bestOf lhs rhs | x -> x
-                            match recur a1, recur a2 with
-                            // BestOf cannot happen here because recur has already been called
-                            | Grapple, _ | _, Grapple when not target.IsGrappled -> Grapple
-                            | ShoveProne, _ | _, ShoveProne when not target.IsProne -> ShoveProne
-                            | Direct(_) as lhs, (Direct(_) as rhs) ->
-                                let evalDmg targetAC adv att =
-                                    match att with
-                                    | Direct(att) ->
-                                        let hitRate = float (min 19 (max 1 (21 + att.ToHit - targetAC))) / 20.
-                                        let hitRate = match adv with | Advantage -> (1. - (1. - hitRate) * (1. - hitRate)) | Disadvantage -> hitRate * hitRate | _ -> hitRate
-                                        let critRate = match adv with | Advantage -> (1. - 0.95 * 0.95) | Disadvantage -> 0.05 * 0.05 | _ -> 0.05
-                                        let avg = Seq.sumBy (fun (roll : DieRoll) -> float roll.Plus + (float roll.N * float (roll.DieSize + 1) / 2.0))
-                                        let dmg = hitRate * (att.Damage |> Seq.sumBy (fst >> avg)) + critRate * (att.Damage |> Seq.sumBy (fst >> critBonus >> avg))
-                                        dmg
-                                    | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
-                                let evalDmg = evalDmg target.AC attackerStatus
-                                if evalDmg(lhs) < evalDmg(rhs) then
-                                    rhs
-                                else
-                                    lhs
-                            | Direct(_) as att, _ | _, (Direct(_) as att) -> att
-                            | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
-                        let best = bestOf a1 a2
-                        executeAttack best
-                    | Grapple ->
-                        target.TryGrapple (d20 Regular + athletics this)
-                    | ShoveProne ->
-                        target.TryShoveProne (d20 Regular + athletics this)
                 match a.Effect with
                 | Attack(attacks) ->
+                    // rage first if applicable
+                    if hasBonusAction && rage = 0 then
+                        match this.Traits |> List.tryPick (function Rage(x) as t -> Some x | _ -> None) with
+                        | Some(x) ->
+                            hasBonusAction <- false
+                            rage <- x
+                            printfn "%s is enraged!" this.Name
+                        | _ -> ()
                     for a in attacks do
-                        executeAttack a
+                        this.Attack(a, target)
                 | Instant(t, d) -> ()
                 | ConcentrationEffect(dc, t, effects) -> ()
                 | Healing(amt) -> restoreHP (d amt.N amt.DieSize amt.Plus)
@@ -366,12 +391,16 @@ module Combatants =
                     match this.BonusActions |> Seq.tryFind canUse with
                     | Some(bonus) -> execute bonus
                     | _ -> ()
+        member this.rollInit =
+            let init = d20 Regular
+            let bonus = this.InitBonus
+            if (init + bonus) < 18 && hasTrait this LuckyInit && this.TryLuck() then
+                let reroll = d20 Regular
+                printfn "%s gets lucky on initiative! Rerolls %d (%d+%d) to %d (%d+%d)" this.Name (init + bonus) init bonus (reroll + bonus) reroll bonus
+                max (init + bonus) (reroll + bonus)
+            else
+                init + bonus
 
-    let rollInit (c: Combatant) =
-            d 1 20 c.InitBonus
-
-    type Combatant with
-        member this.rollInit = rollInit this
 open Combatants
 let undeadNames = ["Allator"; "Ashem"; "Antema"; "Cashal"; "Cernem"; "Korgol"; "Kotyth"; "Losmig"; "Milogos"; "Mithok"; "Murok"; "Simith"; "Styx"; "Terryth"; "Vörnak"; "Sathmog"; "Angmar"; "Khamul"; "Kurgal"; "Mordeith"; "Lothar"; "Nar"; "Ahriman"; "Mogmol"; "Necromorben"; "Mort"; "Zantaron"; "Tahmar"; "Ymic"; "Angrod"; "Uvatha"; "Suleiman"; "Myrkuul"; "Domex"; "Ziruk"; "Sirakzil"; "Ärek Iilum"; "Embaar"; "Maegul"; "Adonhel"; "Karmgul"; "Uftrak"; "Askator"; "Argator"; "Betegrath"; "Bakhtor"; "Bayr al Adhu"; "Cernetu"; "Castartu"; "Darzatu"; "Dimmu"; "Eriadu"; "Ebenezar"; "Fegamur"; "Fechuntu"; "Githeren"; "Gevalodh"; "Gevudrah"; "Gether Kuhadh"; "Hahkaloth"; "Heikhra"; "Igevurdh"; "Igthengu"; "Jithu"; "Jinnud"; "Kumlakh"; "Kmorduk"; "Lodvathu"; "Laidukh"; "Mogracu"; "Mekhaloth"; "Mekhennum"; "Meknadin"; "Mekinthur"; "Meikru Zoth"; "Nur Zaruth"; "Nur Manthu"; "Nardimmu"; "Nakhaloth"; "Oskatu"; "Okeddur"; "Pekharoth"; "Penetor"; "Pantor"; "Qudlik"; "Qudarrath"; "Revdinator"; "Raitor"; "Sidsheku"; "Saoluthi"; "Sarmas"; "Shek Dimmu"; "Trikhatre"; "Trakhtor"; "Uvekhtu"; "Ur"; "Urathu"; "Vekhithu"; "Valgömu"; "Xomanthu"; "Xirrath"; "Ychekhes"; "Ygirod"; "Zrakhnadar"; "Zeginthu"; "Öknar Hadu"; "Öskogoth"; "Mesamalok"; "Alalar"; "Tagg Klatu"; "Melkior"; "Deathtongue"; "Grind"; "Rend"; "Rotheart"; "Deadflesh"; "Wormwood"; "Dustheart"; "Ashsoul"; "Rotflesh"; "Winterbreath"; "Foulflesh"; "Etter"; "Venomspew"; "Plaguevomit"; "Bonecrush"; "Boneater"; "Femur"; "Foetid"; "Gnarlytooth"; "Plaguewhistler"; "Feartongue"; "Leprosy"; "Scrofula"; "Typhon"; "Banewound"; "Eyeless"; "Eyesore"; "Boneheart"; "Foulslay"; "Soulrend"; "Bitterwind"; "Plaguetooth"; "Plaguetongue"; "Rotbrother"; "Heartrot"; "Sigh"; "Boneshudder"; "Shudder"; "Hollow"; "Heartless"; "Headless"; "Crawler"; "Nightbane"; "Wormvenom"; "Wormfood"; "Wormfriend"; "Unburied"; "Childslay"; "Manhate"; "Manslay"; "Shriek"; "Despair"; "Hopevoid"; "Quickdeath"; "Plaguehope"; "Leperlove"; "Sickpit"; "Plaguepit"; "Deathstink"; "Plaguestink"; "Wormlove"; "Wormplague"; "Lepercrawl"; "Spittle"; "Plaguespittle"; "Gravetongue"; "Eyegrave"; "Gravesoul"; "Gravecaller"; "Deathgrip"; "Skullbreaker"; "Graveskull"; "Tombworm"; "Nightworm"; "Nightheart"; "Chillwind"; "Chillsoul"; "Gravechill"; "Gravespittle"; "Tombspittle"; "Plaguestorm"; "Childfeaster"; "Wormfeast"; "Plaguesoul"; "Plaguesinger"; "Deathlight"; "Puswound"; "Puseye"; "Tombshadow"; "Knucklebones"; "Splitskull"; "Screech"; "Graveschreech"; "Orphaneater"; "Fleshfeaster"; "Carnage"; "Dustsoul"; "Deathgasp"; "Deathjest"]
 let earthNames = ["Stalagmite"; "Stalactite"; "Basalt"; "Granite"; "Onyx"; "Rockheart"; "Stoneheart"; "Deepheart"; "Pebbleheart"; "Boulderheart"; "Caveheart"; "Basaltheart"; "Earthheart"; "Soilheart"; "Gemheart"; "Onyxheart"; "Paleheart"; "Sandheart"; "Pillarheart"; "Twoheart"; "Rockthought"; "Stonethought"; "Deepthought"; "Pebblethought"; "Boulderthought"; "Cavethought"; "Basaltthought"; "Earththought"; "Soilthought"; "Gemthought"; "Palethought"; "Sandthought"; "Pillarthought"; "Twothought"; "Rocksoul"; "Stonesoul"; "Deepsoul"; "Cavesoul"; "Earthsoul"; "Gemsoul"; "Twosoul"; "Caveson"; "Earthson"; "Twoson"; "Rockstrength"; "Stonestrength"; "Deepstrength"; "Pebblestrength"; "Boulderstrength"; "Cavestrength"; "Earthstrength"; "Twostrength"; "Rockhand"; "Stonehand"; "Pebblehand"; "Boulderhand"; "Cavehand"; "Gemhand"; "Palehand"; "Sandhand"; "Onehand"; "Rockspine"; "Stonespine"; "Pebblespine"; "Boulderspine"; "Cavespine"; "Earthspine"; "Gemspine"; "Pillarspine"; "Twospine"; "Rockmind"; "Stonemind"; "Deepmind"; "Pebblemind"; "Bouldermind"; "Cavemind"; "Earthmind"; "Soilmind"; "Palemind"; "Sandmind"; "Pillarmind"; "Rockfinger"; "Stonefinger"; "Pebblefingers"; "Cavefinger"; "Earthfinger"; "Gemfinger"; "Palefingers"; "Sandfinger"; "Pillarfingers"; "Twofinger"; "Rockbone"; "Stonebone"; "Deepbone"; "Pebblebone"; "Cavebone"; "Earthbone"; "Sandbone"; "Pillarbone"; "Twobone"; "Rockeye"; "Stoneeye"; "Deepeye"; "Pebbleeye"; "Eartheye"; "Sandeye"; "Twoeyes"; "Rockmined"; "Stonemined"; "Pebblemined"; "Cavemined"; "Rockborn"; "Stoneborn"; "Deepborn"; "Pebbleborn"; "Boulderborn"; "Caveborn"; "Basaltborn"; "Earthborn"; "Soilborn"; "Gemborn"; "Paleborn"; "Sandborn"; "Pillarborn"; "Rockspawned"; "Stonespawned"; "Deepspawned"; "Pebblespawned"; "Boulderspawned"; "Cavespawned"; "Earthspawned"; "Soilspawned"; "Gemspawned"; "Sandspawned"; "Pillarspawned"; "Twospawned"; "Rockbreaker"; "Stonebreaker"; "Deepbreaker"; "Pebblebreaker"; "Boulderbreaker"; "Cavebreaker"; "Basaltbreaker"; "Earthbreaker"; "Soilbreaker"; "Gembreaker"; "Onyxbreaker"; "Palebreaker"; "Pillarbreaker"; "Twicebreaker"; "Rubyheart"; "Emeraldheart"; "Saphireheart"; "Diamondheart"; "Rubythought"; "Diamondthought"; "Rubysoul"; "Emeraldsoul"; "Diamondsoul"; "Rubymind"; "Emeraldmind"; "Diamondmind"; "Rubyeye"; "Emeraldeye"; "Diamondeye"; "Rubyborn"; "Emeraldborn"; "Saphireborn"; "Diamondborn"; "Rubyspawned"; "Emeraldspawned"; "Saphirespawned"; "Diamondspawned"; "Ruby"; "Emerald"; "Saphire"; "Diamond"; "Stonekiss"; "Pebblekiss"; "Cavekiss"; "Earthkiss"; "Sandkiss"; "Twokiss"; "Olmkiss"; "Rockfriend"; "Stonefriend"; "Deepfriend"; "Pebblefriend"; "Boulderfriend"; "Cavefriend"; "Basaltfriend"; "Earthfriend"; "Soilfriend"; "Gemfriend"; "Onyxfriend"; "Palefriend"; "Sandfriend"; "Pillarfriend"; "Twofriend"; "Olmfriend"]
@@ -745,7 +774,19 @@ let swash1() = Combatant(nameOf humanNames "Agile", (16, 12, 16, 11, 12, 10, 13)
                         BonusActions = [
                             Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 1)), 1)
                         ])
-
+let frogReaver() = Combatant(nameOf humanNames "FrogReaver", (16, 14, 16, 8, 10, 12, 15), Prof = +2, AC = 17,
+                        Traits=[Rage 2; DoubleCrits; RelentlessEndurance],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ])
+let plagueScarred() = Combatant(nameOf humanNames "Plaguescarred", (16, 14, 16, 8, 10, 12, 15), Prof = +2, AC = 16,
+                        Traits=[Rage 2; PolearmMaster (Attack.Create "cuts" 5 [DieRoll.Create(1, 10, 3)])],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 10, 3)]])
+                        ],
+                        BonusActions = [
+                            Action.Create("Haft Attack", Attack [Attack.Create "bludgeons" 5 [DieRoll.Create(1, 4, 3)]])
+                        ])
 
 let fight side1 side2 =
     let all = List.append side1 side2
@@ -823,5 +864,8 @@ let evalGroup opponents friendlies =
 //compare [champion9b;champion9b;archer9b;archer9b;archer9b] [pitFiend]
 //compare [champion9b;champion9b;archer9b;archer9b;archer9b] [balor]
 
-fight [lucky1()] [orc()]
-compare [orc] [heavyArmor1;lucky1;lucky1b;swash1;gwm1;crossbowExpert1]
+compare [orc] [heavyArmor1;lucky1;lucky1b;swash1;gwm1;crossbowExpert1;frogReaver; plagueScarred; fun () -> Combatant(nameOf humanNames "Lucky Barbarian", (16, 14, 16, 8, 10, 12, 15), Prof = +2, AC = 17,
+                        Traits=[Rage 2; LuckyDefender; LuckyInit],
+                        Actions = [
+                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
+                        ])]
