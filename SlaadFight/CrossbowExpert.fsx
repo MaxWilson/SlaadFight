@@ -850,9 +850,30 @@ let shooter17() = Combatant(nameOf humanNames "the Archer", (12, 20, 18, 10, 14,
                         Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])])
                     ])
 
-let adultRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "the Red", (27, 10, 25, 16, 13, 21, 256), AC=19, Blindsight=true, Traits = [ShieldSpell; FearAura(19)],
+let adultRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "Red", (27, 10, 25, 16, 13, 21, 256), AC=19, Blindsight=true, Traits = [ShieldSpell; FearAura(19)],
                         SP=38,
                         Actions = [
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 21, DieRoll.Create(18, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 14 ([DieRoll.Create(2,10,8)], Weapon) ([DieRoll.Create(2,6)], Fire)
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    ], 2)
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 21, DieRoll.Create(18, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 14 ([DieRoll.Create(2,10,8)], Weapon) ([DieRoll.Create(2,6)], Fire)
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    ], 2)
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 21, DieRoll.Create(18, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 14 ([DieRoll.Create(2,10,8)], Weapon) ([DieRoll.Create(2,6)], Fire)
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    ], 2)
                             Action.Create("Breath attack sequence",
                                 Instant(EnemyOnly, SaveForHalf(Dex, 21, DieRoll.Create(18, 6), Fire)), 1)
                             Action.Create("Multiattack", Attack [
@@ -870,9 +891,30 @@ let adultRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";
                                                 ])
                             ])
 
-let ancientRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "the Ancient Red", (30, 10, 29, 18, 15, 23, 546), AC=22, Blindsight=true, Traits = [ShieldSpell; FearAura(21)],
+let ancientRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "Ancient Red", (30, 10, 29, 18, 15, 23, 546), AC=22, Blindsight=true, Traits = [ShieldSpell; FearAura(21)],
                         SP=38,
                         Actions = [
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 24, DieRoll.Create(26, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 17 ([DieRoll.Create(2,10,10)], Weapon) ([DieRoll.Create(4,6)], Fire)
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    ], 2)
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 24, DieRoll.Create(26, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 17 ([DieRoll.Create(2,10,10)], Weapon) ([DieRoll.Create(4,6)], Fire)
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    ], 2)
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 24, DieRoll.Create(26, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 17 ([DieRoll.Create(2,10,10)], Weapon) ([DieRoll.Create(4,6)], Fire)
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    ], 2)
                             Action.Create("Breath attack sequence",
                                 Instant(EnemyOnly, SaveForHalf(Dex, 24, DieRoll.Create(26, 6), Fire)), 1)
                             Action.Create("Multiattack", Attack [
@@ -974,4 +1016,5 @@ let evalGroup opponents friendlies =
 AreaIsObscured <- true
 evalGroup [adultRedSorc9] [shooter17;shooter17;shooter17;shooter17]
 evalGroup [adultRedSorc9] [shooter20;shooter20;shooter20;shooter20]
+evalGroup [adultRedSorc9] [shooter20b;shooter20b;shooter20b;shooter20b]
 evalGroup [ancientRedSorc9] [shooter20;shooter20;shooter20;shooter20]
