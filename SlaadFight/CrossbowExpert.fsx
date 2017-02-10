@@ -405,7 +405,7 @@ module Combatants =
                     let action = this.Actions |> Seq.find canUse
                     printfn "ACTION SURGE!!"
                     execute action
-                    hasActionSurged <- 2
+                    hasActionSurged <- hasActionSurged + 1
                 if hasBonusAction then
                     match this.BonusActions |> Seq.tryFind canUse with
                     | Some(bonus) -> execute bonus
