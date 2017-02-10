@@ -14,7 +14,7 @@ type DieRoll = { N: int; DieSize: int; Plus: int } with
         rolls |> Seq.sumBy (fun roll -> d roll.N roll.DieSize roll.Plus)
     static member eval (roll: DieRoll) =
         d roll.N roll.DieSize roll.Plus
-type DamageType = Weapon | MagicalWeapon | Poison | Fire | Lightning | Cold
+type DamageType = Weapon | MagicalWeapon | Poison | Fire | Lightning | Cold | Force
 type SaveAbility = Str | Dex | Con | Int | Wis | Cha
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
 type Effect = Restrained | Grappled | Prone | Afraid | Blinded | OngoingDamage of SaveAbility * int * Damage | Constrict of DieRoll
@@ -28,7 +28,7 @@ type Attack = Direct of DirectAttack | Grapple | ShoveProne | BestOf of Attack *
     static member CreateDualType descriptor t d1 d2 = Direct { Text = descriptor; ToHit = t; Damage = [d1;d2]; Rider = None }
     static member CreateMagic descriptor t d = Direct { Text = descriptor; ToHit = t; Damage = [d, MagicalWeapon]; Rider = None }
     static member CreateMagicWithRider descriptor t d rider = Direct { Text = descriptor; ToHit = t; Damage = [d, MagicalWeapon]; Rider = Some rider }
-type AoETarget = All | EnemyOnly
+type AoETarget = All | SingleEnemy | EnemyOnly
 type ActionEffect = Attack of Attack list | Instant of AoETarget * Damage | ConcentrationEffect of int * AoETarget * Effect list | Healing of DieRoll | BreakFree
 type Action = { Name : string; Effect: ActionEffect; mutable UsesRemaining: int option; } with
     static member Create (name, effect) = { Name = name; Effect = effect; UsesRemaining = None }
@@ -368,7 +368,10 @@ module Combatants =
                         | _ -> ()
                     for a in attacks do
                         this.Attack(a, target)
-                | Instant(EnemyOnly, SaveForHalf(ability, dc, damage, dtype)) -> 
+                | Instant(SingleEnemy, Unavoidable(dmg, dtype)) ->
+                    let dmg = DieRoll.eval dmg
+                    target.TakeDamage dmg dtype None
+                | Instant(EnemyOnly, SaveForHalf(ability, dc, damage, dtype)) ->
                     let damage = DieRoll.eval damage
                     for target in allFoes do
                         let save = target.SaveBonus(ability) + (d20 Regular)
@@ -389,6 +392,7 @@ module Combatants =
                         removeEffect Prone
                     else
                         printfn "%s cannot break free! (%d does not beat %d)" this.Name me him
+                | argMatch -> badMatch __SOURCE_FILE__ __LINE__ argMatch
             if hasAction then
                 let action = this.Actions |> Seq.find canUse
                 execute action
@@ -814,7 +818,7 @@ let shooter20() = Combatant("Rufus the Archer", (12, 20, 18, 10, 14, 8, 204), AC
                                                                 ])
                     ],
                     BonusActions = [
-                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)                                      
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)
                         Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])])
                     ])
 // Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Eldritch Knight 20, with feats Sharpshooter, Crossbow Expert, Tough, +4 Dex, and +6 Con; fighting styles Archery and Defense.
@@ -828,7 +832,7 @@ let shooter20b() = Combatant(nameOf humanNames "the Archer", (12, 20, 20, 10, 14
                                                                 ])
                     ],
                     BonusActions = [
-                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)                                      
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)
                         Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])])
                     ])
 
@@ -842,7 +846,7 @@ let shooter17() = Combatant(nameOf humanNames "the Archer", (12, 20, 18, 10, 14,
                                                                 ])
                     ],
                     BonusActions = [
-                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 17)), 1)                                      
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 17)), 1)
                         Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])])
                     ])
 
@@ -856,13 +860,13 @@ let adultRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";
                                                                     Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
                                                                     Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
                                                                     ])
-                        ], 
+                        ],
                         BonusActions = [
-                            Action.Create("Legendary attack", 
+                            Action.Create("Legendary attack",
                                               Attack [
                                                 Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]
                                                 Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]
-                                                Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]                            
+                                                Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]
                                                 ])
                             ])
 
@@ -876,13 +880,13 @@ let ancientRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix
                                                                     Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
                                                                     Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
                                                                     ])
-                        ], 
+                        ],
                         BonusActions = [
-                            Action.Create("Legendary attack", 
+                            Action.Create("Legendary attack",
                                               Attack [
                                                 Attack.Create "tail-swipes" 1174 [DieRoll.Create(2, 8, 10)]
                                                 Attack.Create "tail-swipes" 17 [DieRoll.Create(2, 8, 10)]
-                                                Attack.Create "tail-swipes" 17 [DieRoll.Create(2, 8, 10)]                            
+                                                Attack.Create "tail-swipes" 17 [DieRoll.Create(2, 8, 10)]
                                                 ])
                             ])
 
