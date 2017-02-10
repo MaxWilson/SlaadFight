@@ -12,6 +12,8 @@ type DieRoll = { N: int; DieSize: int; Plus: int } with
     static member Create(n, d, x) = { N = n; DieSize = d; Plus = x }
     static member eval (rolls: DieRoll list) =
         rolls |> Seq.sumBy (fun roll -> d roll.N roll.DieSize roll.Plus)
+    static member eval (roll: DieRoll) =
+        d roll.N roll.DieSize roll.Plus
 type DamageType = Weapon | MagicalWeapon | Poison | Fire | Lightning | Cold
 type SaveAbility = Str | Dex | Con | Int | Wis | Cha
 type Damage = Unavoidable of DieRoll * DamageType | SaveForHalf of SaveAbility * int * DieRoll * DamageType
@@ -57,7 +59,7 @@ let formatDice (dice: DieRoll list) =
             loop (if Map.containsKey dr.DieSize acc then Map.add dr.DieSize (acc.[dr.DieSize] + dr.N) acc else Map.add dr.DieSize dr.N acc) (staticBonus + dr.Plus) t
     loop Map.empty 0 dice
 
-type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | SneakAttack of DieRoll | UncannyDodge
+type Trait = DefensiveDuelist | MageSlayer | RemarkableAthlete | AthleticsExpertise | AthleticsProficient | ImprovedCritical | ActionSurge | ActionSurge2 | SneakAttack of DieRoll | UncannyDodge
              | HeavyArmorMaster | Reactive | ShieldSpell | FearAura of int | MagicResistant | LuckyDefender | LuckyAttacker | LuckyInit | GreatWeaponMaster | Rage of int | DoubleCrits | RelentlessEndurance
              | PolearmMaster of Attack
 
@@ -70,7 +72,7 @@ module Combatants =
         let mutable prof = +4 // for this sim, proficiency bonus is +4 for both Slaads and Fighters
         let mutable concentration = ref None
         let mutable hasReaction = true
-        let mutable hasActionSurged = false
+        let mutable hasActionSurged = 0
         let mutable hasAction = true
         let mutable hp = maxHP
         let mutable hasSneakAttacked = false
@@ -311,7 +313,7 @@ module Combatants =
                     target.TryGrapple (d20 Regular + athletics this)
                 | ShoveProne ->
                     target.TryShoveProne (d20 Regular + athletics this)
-        member this.TakeTurn (target: Combatant) =
+        member this.TakeTurn (target: Combatant, allFoes: Combatant list) =
             let isProne = ongoingEffects |> Effect.Exists Prone
             let isGrappled = ongoingEffects |> Effect.Exists Grappled
             if isProne && not isGrappled then
@@ -366,7 +368,15 @@ module Combatants =
                         | _ -> ()
                     for a in attacks do
                         this.Attack(a, target)
-                | Instant(t, d) -> ()
+                | Instant(EnemyOnly, SaveForHalf(ability, dc, damage, dtype)) -> 
+                    let damage = DieRoll.eval damage
+                    for target in allFoes do
+                        let save = target.SaveBonus(ability) + (d20 Regular)
+                        printfn "%A save: %d (needed %d)" ability save dc
+                        if save >= dc then
+                            target.TakeDamage damage dtype None
+                        else
+                            target.TakeDamage (damage/2) dtype None
                 | ConcentrationEffect(dc, t, effects) -> ()
                 | Healing(amt) -> restoreHP (d amt.N amt.DieSize amt.Plus)
                 | BreakFree ->
@@ -382,11 +392,16 @@ module Combatants =
             if hasAction then
                 let action = this.Actions |> Seq.find canUse
                 execute action
-                if hasTrait this ActionSurge && not hasActionSurged then
+                if (((hasTrait this ActionSurge) || (hasTrait this ActionSurge2)) && hasActionSurged = 0) then
                     let action = this.Actions |> Seq.find canUse
                     printfn "ACTION SURGE!!"
                     execute action
-                    hasActionSurged <- true
+                    hasActionSurged <- 1
+                elif (hasTrait this ActionSurge2 && (hasActionSurged <= 1)) then
+                    let action = this.Actions |> Seq.find canUse
+                    printfn "ACTION SURGE!!"
+                    execute action
+                    hasActionSurged <- 2
                 if hasBonusAction then
                     match this.BonusActions |> Seq.tryFind canUse with
                     | Some(bonus) -> execute bonus
@@ -788,6 +803,90 @@ let plagueScarred() = Combatant(nameOf humanNames "Plaguescarred", (16, 14, 16, 
                             Action.Create("Haft Attack", Attack [Attack.Create "bludgeons" 5 [DieRoll.Create(1, 4, 3)]])
                         ])
 
+// Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Eldritch Knight 20, with feats Sharpshooter, Crossbow Expert, Tough, Lucky, +4 Dex, and +4 Con; fighting styles Archery and Defense. Has a +2 Hand Crossbow.
+let shooter20() = Combatant("Rufus the Archer", (12, 20, 18, 10, 14, 8, 204), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; ActionSurge2; AthleticsProficient; ShieldSpell; LuckyAttacker], SP=38,
+                    Actions = [
+                        Action.Create("Crossbow Attack", Attack [
+                                                                BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])
+                                                                BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])
+                                                                BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])
+                                                                BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])
+                                                                ])
+                    ],
+                    BonusActions = [
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)                                      
+                        Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 10 [DieRoll.Create(1, 6, 17)], Attack.Create "shoots" 15 [DieRoll.Create(1, 6, 7)])])
+                    ])
+// Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Eldritch Knight 20, with feats Sharpshooter, Crossbow Expert, Tough, +4 Dex, and +6 Con; fighting styles Archery and Defense.
+let shooter20b() = Combatant(nameOf humanNames "the Archer", (12, 20, 20, 10, 14, 8, 224), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; ActionSurge2; AthleticsProficient; ShieldSpell], SP=38,
+                    Actions = [
+                        Action.Create("Crossbow Attack", Attack [
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                ])
+                    ],
+                    BonusActions = [
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 20)), 1)                                      
+                        Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])])
+                    ])
+
+// Rufus was created using PHB standard array (15 14 13 12 10 8), variant human Eldritch Knight 20, with feats Sharpshooter, Crossbow Expert, Tough, +4 Dex, and +4 Con; fighting styles Archery and Defense.
+let shooter17() = Combatant(nameOf humanNames "the Archer", (12, 20, 18, 10, 14, 8, 174), AC=19, Traits = [RemarkableAthlete; ImprovedCritical; ActionSurge; AthleticsProficient; ShieldSpell], SP=38,
+                    Actions = [
+                        Action.Create("Crossbow Attack", Attack [
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])
+                                                                ])
+                    ],
+                    BonusActions = [
+                        Action.Create("Second Wind", Healing (DieRoll.Create(1, 10, 17)), 1)                                      
+                        Action.Create("Bonus Attack", Attack [BestOf (Attack.Create "headshots" 8 [DieRoll.Create(1, 6, 15)], Attack.Create "shoots" 13 [DieRoll.Create(1, 6, 5)])])
+                    ])
+
+let adultRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "the Red", (27, 10, 25, 16, 13, 21, 256), AC=19, Blindsight=true, Traits = [ShieldSpell; FearAura(19)],
+                        SP=38,
+                        Actions = [
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 21, DieRoll.Create(18, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 14 ([DieRoll.Create(2,10,8)], Weapon) ([DieRoll.Create(2,6)], Fire)
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    Attack.Create "claws" 14 [DieRoll.Create(2, 6, 8)]
+                                                                    ])
+                        ], 
+                        BonusActions = [
+                            Action.Create("Legendary attack", 
+                                              Attack [
+                                                Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]
+                                                Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]
+                                                Attack.Create "tail-swipes" 14 [DieRoll.Create(2, 8, 8)]                            
+                                                ])
+                            ])
+
+let ancientRedSorc9() = Combatant(nameOf ["Ancalagon";"Falgavarnon";"Edrimithrix";"Gartuoloth"] "the Ancient Red", (30, 10, 29, 18, 15, 23, 546), AC=22, Blindsight=true, Traits = [ShieldSpell; FearAura(21)],
+                        SP=38,
+                        Actions = [
+                            Action.Create("Breath attack sequence",
+                                Instant(EnemyOnly, SaveForHalf(Dex, 24, DieRoll.Create(26, 6), Fire)), 1)
+                            Action.Create("Multiattack", Attack [
+                                                                    Attack.CreateDualType "bites" 17 ([DieRoll.Create(2,10,10)], Weapon) ([DieRoll.Create(4,6)], Fire)
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    Attack.Create "claws" 17 [DieRoll.Create(2, 6, 10)]
+                                                                    ])
+                        ], 
+                        BonusActions = [
+                            Action.Create("Legendary attack", 
+                                              Attack [
+                                                Attack.Create "tail-swipes" 1174 [DieRoll.Create(2, 8, 10)]
+                                                Attack.Create "tail-swipes" 17 [DieRoll.Create(2, 8, 10)]
+                                                Attack.Create "tail-swipes" 17 [DieRoll.Create(2, 8, 10)]                            
+                                                ])
+                            ])
+
+
 let fight side1 side2 =
     let all = List.append side1 side2
     let computeOrder () =
@@ -803,13 +902,17 @@ let fight side1 side2 =
     let findOpponent c =
         let opponents = if List.exists ((=)c) side1 then side2 else side1
         opponents |> List.tryFind(fun (c: Combatant) -> c.IsAlive)
+    let findOpponents c =
+        let opponents = if List.exists ((=)c) side1 then side2 else side1
+        opponents |> List.filter (fun (c: Combatant) -> c.IsAlive)
+
     let mutable round = 1
     while hasLive side1 && hasLive side2 do
         printfn "Round #%d:" round
         for c in combatantsInOrder do
             if c.IsAlive then
                 match findOpponent c with
-                | Some(opponent) -> c.TakeTurn opponent
+                | Some(opponent) -> c.TakeTurn(opponent, (findOpponents c))
                 | None -> ()
             all |> List.iter (fun c -> c.newTurn())
         printfn "Status after round #%d:" round
@@ -864,8 +967,7 @@ let evalGroup opponents friendlies =
 //compare [champion9b;champion9b;archer9b;archer9b;archer9b] [pitFiend]
 //compare [champion9b;champion9b;archer9b;archer9b;archer9b] [balor]
 
-compare [orc] [heavyArmor1;lucky1;lucky1b;swash1;gwm1;crossbowExpert1;frogReaver; plagueScarred; fun () -> Combatant(nameOf humanNames "Lucky Barbarian", (16, 14, 16, 8, 10, 12, 15), Prof = +2, AC = 17,
-                        Traits=[Rage 2; LuckyDefender; LuckyInit],
-                        Actions = [
-                            Action.Create("Attack", Attack [Attack.Create "cuts" 5 [DieRoll.Create(1, 8, 3)]])
-                        ])]
+AreaIsObscured <- true
+evalGroup [adultRedSorc9] [shooter17;shooter17;shooter17;shooter17]
+evalGroup [adultRedSorc9] [shooter20;shooter20;shooter20;shooter20]
+evalGroup [ancientRedSorc9] [shooter20;shooter20;shooter20;shooter20]
